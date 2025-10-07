@@ -1,0 +1,410 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Compfilter — prototype</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link href="/styles.css" rel="stylesheet" />
+</head>
+<body>
+  <div class="container">
+    <h1>Compfilter (prototype)</h1>
+    <p>Choose filters, preview row count, then download.</p>
+
+    <div id="dashboard" class="card">
+      <h2 class="h2">Filters</h2>
+      <div id="filterButtons" class="btn-grid"></div>
+
+      <div id="activeSummary" class="summary"></div>
+
+      <div class="actions">
+        <button id="previewBtn">Preview count</button>
+        <span id="previewOut" class="muted"></span>
+        <button id="downloadBtn">Download CSV</button>
+      </div>
+    </div>
+
+    <div id="panel" class="card panel hidden">
+      <div class="panel-header">
+        <button id="backBtn" class="link-btn">← Back</button>
+        <h3 id="panelTitle"></h3>
+        <div></div>
+      </div>
+      <div id="aoiUploaderContainer" class="card hidden" style="padding:12px;">
+  <div class="muted" style="margin-bottom:6px;">Custom area (GeoJSON, EPSG:4326)</div>
+  <div class="grid" style="grid-template-columns:1fr auto; gap:8px;">
+    <input id="aoiFile" type="file" accept=".geojson,application/geo+json" />
+    <button id="aoiUploadBtn" type="button">Upload</button>
+  </div>
+  <div class="muted" style="font-size:12px;margin-top:6px;">
+    After upload, your area appears in the list as <em>custom:&lt;filename&gt;</em>. Tick it and Save.
+  </div>
+</div>
+<div id="panelOptions"></div>
+      <div class="actions">
+        <button id="saveBtn">Save selection</button>
+        <span id="panelHint" class="muted"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Try external script first -->
+  <script src="/script.js?v=rev7"></script>
+
+  <!-- Inline fallback if external didn't boot -->
+  <script>
+  (function(){
+    if (window.__CompfilterBooted) return;
+
+    const $ = (sel) => document.querySelector(sel);
+    const API = (path) => `${location.origin}${path}`;
+
+    let FILTERS_META = [];
+    let FILTER_OPTIONS = {};
+    let SELECTED = {};
+    let ACTIVE_KEY = null;
+
+    function getMeta(key){ return FILTERS_META.find(f=>f.key===key) || {key, label:key, type:"multiselect"}; }
+
+    function summarizeSelection(key){
+      const meta = getMeta(key);
+      const sel = SELECTED[key] || [];
+      if(meta.type==="number"){
+        const mn = sel[0] ?? "";
+        const mx = sel[1] ?? "";
+        if(!mn && !mx) return "x";
+        if(mn && mx) return `${mn}–${mx}`;
+        if(mn) return `≥ ${mn}`;
+        return `≤ ${mx}`;
+      }
+      if(meta.type==="group"){
+        if(key==='overige'){
+          const tn = sel.find(t=>t==='tn=TRUE'||t==='tn=FALSE');
+          const dmin = (sel.find(t=>t.startsWith('date_min='))||'').split('=')[1]||'';
+          const dmax = (sel.find(t=>t.startsWith('date_max='))||'').split('=')[1]||'';
+          const parts=[];
+          if(tn) parts.push(tn.replace('tn=','tn:'));
+          if(dmin||dmax) parts.push(dmin&&dmax?`date:${dmin}–${dmax}`:(dmin?`date:≥ ${dmin}`:`date:≤ ${dmax}`));
+          return parts.length?parts.join(' · '):'x';
+        }
+        // vestiging summary
+        const gd = sel.filter(t => t.startsWith("gd=")).length;
+        const hv = sel.find(t => t==="hv=TRUE" || t==="hv=FALSE");
+        const nm = sel.find(t => t==="nm=TRUE" || t==="nm=FALSE");
+        const omin = sel.find(t => t.startsWith("oppmin="));
+        const omax = sel.find(t => t.startsWith("oppmax="));
+        const parts = [];
+        if(gd>0) parts.push(`gd:${gd}`);
+        if(hv) parts.push(hv.replace("hv=","hv:"));
+        if(nm) parts.push(nm.replace("nm=","nm:"));
+        if(omin || omax){
+          const a = omin ? omin.split("=")[1] : "";
+          const b = omax ? omax.split("=")[1] : "";
+          parts.push(a && b ? `opp:${a}–${b}` : (a ? `opp:≥ ${a}` : `opp:≤ ${b}`));
+        }
+        return parts.length ? parts.join(" · ") : "x";
+      }
+      return `${sel.length} selected`;
+    }
+
+    function renderDashboard(){
+      const btnHost=$("#filterButtons"); btnHost.innerHTML="";
+      FILTERS_META.forEach(f=>{
+        const btn=document.createElement("button");
+        btn.className="filter-btn";
+        btn.dataset.key=f.key;
+        const detail = summarizeSelection(f.key);
+        btn.innerHTML=`<span>${f.label}</span><span class="badge">${detail}</span>`;
+        btn.addEventListener("click",()=>openPanel(f.key));
+        btnHost.appendChild(btn);
+      });
+
+      const s=$("#activeSummary");
+      const chips = [];
+      Object.entries(SELECTED).forEach(([k,v])=>{
+        if(!v || v.length===0) return;
+        const meta = getMeta(k);
+        chips.push(`<span class="chip" data-key="${k}">${meta.label}: ${summarizeSelection(k)}<button class="chip-x" data-clearkey="${k}" title="Clear">×</button></span>`);
+      });
+      const hasAny = chips.length>0;
+      s.innerHTML = `<div class="chips">${chips.join(" ")}${hasAny ? '<button class="chip clear-all" id="clearAllBtn">Clear all</button>' : ''}</div>`;
+    }
+
+    function openPanel(key){
+      // toggle behavior
+      const panelEl = document.getElementById("panel");
+      if (ACTIVE_KEY === key && panelEl && !panelEl.classList.contains("hidden")) {
+        closePanel(false);
+        return;
+      }
+
+      ACTIVE_KEY=key;
+      const meta=getMeta(key);
+      $("#panelTitle").textContent=meta.label;
+      const host=$("#panelOptions");
+      host.innerHTML="";
+
+      if(meta.type==="number"){
+        const current = SELECTED[key] || [];
+        const curMin = current[0] || "";
+        const curMax = current[1] || "";
+        const wrap=document.createElement("div");
+        wrap.innerHTML=`
+          <div class="group">
+            <label class="checkbox" style="display:block"><span>Enter working number range (employees). Use 'x' or leave blank to ignore a side.</span></label>
+          </div>
+          <div class="grid" style="grid-template-columns:1fr 1fr;">
+            <div>
+              <div class="muted" style="margin-bottom:4px;">Min</div>
+              <input id="wnumMin" type="text" inputmode="numeric" pattern="[0-9xX]*" placeholder="x" value="${curMin}">
+            </div>
+            <div>
+              <div class="muted" style="margin-bottom:4px;">Max</div>
+              <input id="wnumMax" type="text" inputmode="numeric" pattern="[0-9xX]*" placeholder="x" value="${curMax}">
+            </div>
+          </div>
+        `;
+        host.appendChild(wrap);
+        $("#panelHint").textContent="Row kept if [row_min,row_max] overlaps your [Min, Max]. 999999999 is treated as ∞.";
+      } else if (meta.type==="group") {
+        if (key === 'overige') {
+          const current = new Set(SELECTED[key]||[]);
+          const wrap=document.createElement('div');
+          wrap.innerHTML = `
+            <div class="card" style="padding:12px;">
+              <div class="muted" style="margin-bottom:6px;">Oprichtingsdatum</div>
+              <div class="grid" style="grid-template-columns:1fr 1fr;">
+                <div>
+                  <div class="muted" style="margin-bottom:4px;">Min</div>
+                  <input id="dateMin" type="date" value="${(Array.from(current).find(t=>t.startsWith('date_min='))||'').split('=')[1]||''}">
+                </div>
+                <div>
+                  <div class="muted" style="margin-bottom:4px;">Max</div>
+                  <input id="dateMax" type="date" value="${((Array.from(current).find(t=>t.startsWith('date_max='))||'').split('=')[1]||'')}">
+                </div>
+              </div>
+            </div>
+            <div class="card" style="padding:12px;">
+              <div class="muted" style="margin-bottom:6px;">Tradenames</div>
+              <label class="checkbox"><input type="checkbox" class="panel-opt-bool" data-token="tn=TRUE" ${current.has('tn=TRUE')?'checked':''}> TRUE</label>
+              <label class="checkbox"><input type="checkbox" class="panel-opt-bool" data-token="tn=FALSE" ${current.has('tn=FALSE')?'checked':''}> FALSE</label>
+              <div class="muted" style="font-size:12px; margin-top:6px;">(Pick both to ignore)</div>
+            </div>
+          `;
+          host.appendChild(wrap);
+          document.getElementById('panelHint').textContent = 'Pick date range and/or tradenames presence. Save selection to apply.';
+        } else {
+          // VESTIGING
+          const options = FILTER_OPTIONS[key] || [];
+          const current = new Set(SELECTED[key] || []);
+
+          const toolbar=document.createElement("div");
+          toolbar.className="mini-actions";
+          toolbar.innerHTML = `
+            <strong>Gebruiksdoel</strong>
+            <div class="spacer"></div>
+            <button id="selectAllBtn" type="button">Select all</button>
+            <button id="clearAllBtn" type="button">Clear</button>
+          `;
+          host.appendChild(toolbar);
+
+          const gdWrap=document.createElement("div");
+          gdWrap.className="grid";
+          options.forEach(opt=>{
+            const token = "gd=" + opt;
+            const id = `gd__${opt.replace(/\s+/g,'_')}`;
+            const wrap=document.createElement("label"); wrap.className="checkbox";
+            wrap.innerHTML = `<input type="checkbox" class="panel-opt-gd" id="${id}" ${current.has(token)?'checked':''} data-token="${token}"> <span>${opt}</span>`;
+            gdWrap.appendChild(wrap);
+          });
+          host.appendChild(gdWrap);
+
+          const bools=document.createElement("div");
+          bools.className="grid";
+          bools.style.gridTemplateColumns="repeat(auto-fill,minmax(220px,1fr))";
+          bools.innerHTML = `
+            <div class="card" style="padding:12px;">
+              <div class="muted" style="margin-bottom:6px;">Hoofdvestiging</div>
+              <label class="checkbox"><input type="checkbox" class="panel-opt-bool" data-token="hv=TRUE" ${current.has("hv=TRUE")?'checked':''}> TRUE</label>
+              <label class="checkbox"><input type="checkbox" class="panel-opt-bool" data-token="hv=FALSE" ${current.has("hv=FALSE")?'checked':''}> FALSE</label>
+              <div class="muted" style="font-size:12px; margin-top:6px;">(Pick both to ignore)</div>
+            </div>
+            <div class="card" style="padding:12px;">
+              <div class="muted" style="margin-bottom:6px;">KVK non-mailing</div>
+              <label class="checkbox"><input type="checkbox" class="panel-opt-bool" data-token="nm=TRUE" ${current.has("nm=TRUE")?'checked':''}> TRUE</label>
+              <label class="checkbox"><input type="checkbox" class="panel-opt-bool" data-token="nm=FALSE" ${current.has("nm=FALSE")?'checked':''}> FALSE</label>
+              <div class="muted" style="font-size:12px; margin-top:6px;">(Pick both to ignore)</div>
+            </div>
+            <div class="card" style="padding:12px;">
+              <div class="muted" style="margin-bottom:6px;">Oppervlakte verblijfsobject</div>
+              <div class="grid" style="grid-template-columns:1fr 1fr;">
+                <div>
+                  <div class="muted" style="margin-bottom:4px;">Min</div>
+                  <input id="oppMin" type="text" inputmode="numeric" pattern="[0-9xX]*" placeholder="x" value="${(Array.from(current).find(t=>t.startsWith('oppmin='))||'').split('=')[1]||''}">
+                </div>
+                <div>
+                  <div class="muted" style="margin-bottom:4px;">Max</div>
+                  <input id="oppMax" type="text" inputmode="numeric" pattern="[0-9xX]*" placeholder="x" value="${(Array.from(current).find(t=>t.startsWith('oppmax='))||'').split('=')[1]||''}">
+                </div>
+              </div>
+              <div class="muted" style="font-size:12px; margin-top:6px;">Leave blank/x to ignore a side.</div>
+            </div>
+          `;
+          host.appendChild(bools);
+
+          toolbar.querySelector("#selectAllBtn").addEventListener("click", ()=>{
+            host.querySelectorAll("input.panel-opt-gd").forEach(ch => ch.checked = true);
+          });
+          toolbar.querySelector("#clearAllBtn").addEventListener("click", ()=>{
+            host.querySelectorAll("input.panel-opt-gd").forEach(ch => ch.checked = false);
+          });
+
+          $("#panelHint").textContent="Pick gebruiksdoel + flags + range as needed. Save selection to apply.";
+        }
+      } else {
+        // default multiselect
+        const toolbar=document.createElement("div");
+        toolbar.className="mini-actions";
+        toolbar.innerHTML = `
+          <strong>Quick actions</strong>
+          <div class="spacer"></div>
+          <button id="selectAllBtn" type="button">Select all</button>
+          <button id="clearAllBtn" type="button">Clear</button>
+        `;
+        host.appendChild(toolbar);
+
+        const optionsWrap=document.createElement("div");
+        optionsWrap.className="grid";
+        const options=FILTER_OPTIONS[key]||[];
+        const selected=new Set(SELECTED[key]||[]);
+        options.forEach(opt=>{
+          const id = `${key}__${opt.replace(/\s+/g,'_')}`;
+          const wrap=document.createElement("label"); wrap.className="checkbox";
+          wrap.innerHTML = `<input type="checkbox" class="panel-opt" id="${id}" ${selected.has(opt)?'checked':''} data-value="${opt}"> <span>${opt}</span>`;
+          optionsWrap.appendChild(wrap);
+        });
+        host.appendChild(optionsWrap);
+
+        toolbar.querySelector("#selectAllBtn").addEventListener("click", ()=>{
+          host.querySelectorAll("input.panel-opt").forEach(ch => ch.checked = true);
+        });
+        toolbar.querySelector("#clearAllBtn").addEventListener("click", ()=>{
+          host.querySelectorAll("input.panel-opt").forEach(ch => ch.checked = false);
+        });
+
+        $("#panelHint").textContent="Use Select all / Clear, then Save selection.";
+      }
+
+      $("#dashboard").classList.add("hidden");
+      $("#panel").classList.remove("hidden");
+    }
+
+    function closePanel(save=false){
+      if(save && ACTIVE_KEY){
+        const meta=getMeta(ACTIVE_KEY);
+        if(meta.type==="number"){
+          const mn = ($("#wnumMin")?.value || "").trim();
+          const mx = ($("#wnumMax")?.value || "").trim();
+          const norm = (v)=> (v.toLowerCase && v.toLowerCase()==="x") ? "" : v;
+          const a = norm(mn), b = norm(mx);
+          if(a==="" && b==="") SELECTED[ACTIVE_KEY]=[];
+          else SELECTED[ACTIVE_KEY]=[a,b];
+        } else if (meta.type==="group"){
+          if (ACTIVE_KEY === 'overige') {
+            const tokens=[];
+            const dmin= (document.getElementById('dateMin')?.value||'').trim();
+            const dmax= (document.getElementById('dateMax')?.value||'').trim();
+            if(dmin) tokens.push('date_min='+dmin);
+            if(dmax) tokens.push('date_max='+dmax);
+            document.querySelectorAll('#panelOptions .panel-opt-bool').forEach(ch=>{ if(ch.checked) tokens.push(ch.dataset.token); });
+            SELECTED[ACTIVE_KEY]=tokens;
+          } else {
+            const tokens = [];
+            $("#panelOptions").querySelectorAll("input.panel-opt-gd").forEach(ch=>{
+              if(ch.checked) tokens.push(ch.dataset.token);
+            });
+            $("#panelOptions").querySelectorAll("input.panel-opt-bool").forEach(ch=>{
+              if(ch.checked) tokens.push(ch.dataset.token);
+            });
+            const omin = ($("#oppMin")?.value || "").trim();
+            const omax = ($("#oppMax")?.value || "").trim();
+            const norm = (v)=> (v.toLowerCase && v.toLowerCase()==="x") ? "" : v;
+            const a = norm(omin), b = norm(omax);
+            if(a) tokens.push("oppmin=" + a);
+            if(b) tokens.push("oppmax=" + b);
+            SELECTED[ACTIVE_KEY] = tokens;
+          }
+        } else {
+          const chosen=[];
+          $("#panelOptions").querySelectorAll("input.panel-opt").forEach(ch=>{ if(ch.checked) chosen.push(ch.dataset.value); });
+          SELECTED[ACTIVE_KEY]=chosen;
+        }
+      }
+      ACTIVE_KEY=null;
+      $("#panel").classList.add("hidden");
+      $("#dashboard").classList.remove("hidden");
+      renderDashboard();
+    }
+
+    async function loadFilters(){
+      const res=await fetch(API("/api/filters"));
+      const data=await res.json();
+      FILTERS_META=data.filters||[];
+      FILTER_OPTIONS=data.options||{};
+      FILTERS_META.forEach(f=>{ if(!SELECTED[f.key]) SELECTED[f.key]=[]; });
+      renderDashboard();
+    }
+
+    async function doPreview(){
+      $("#previewOut").textContent="…";
+      const res=await fetch(API("/api/preview"),{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({selected:SELECTED})
+      });
+      const data=await res.json();
+      $("#previewOut").textContent=`${data.count.toLocaleString()} rows`;
+    }
+
+    async function doDownload(){
+      const res=await fetch(API("/api/download"),{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({selected:SELECTED})
+      });
+      const blob=await res.blob();
+      const url=URL.createObjectURL(blob);
+      const a=document.createElement("a");
+      a.href=url; a.download="filtered_results.csv";
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+    }
+
+    document.addEventListener("DOMContentLoaded",()=>{
+      loadFilters();
+      $("#previewBtn").addEventListener("click",doPreview);
+      $("#downloadBtn").addEventListener("click",doDownload);
+      $("#backBtn").addEventListener("click",()=>closePanel(false));
+      $("#saveBtn").addEventListener("click",()=>closePanel(true));
+
+      document.body.addEventListener("click",(e)=>{
+        const xBtn = e.target.closest(".chip-x");
+        if(xBtn && xBtn.dataset.clearkey){
+          const k = xBtn.dataset.clearkey;
+          if(SELECTED[k]) SELECTED[k] = [];
+          renderDashboard();
+          return;
+        }
+        const clrAll = e.target.closest("#clearAllBtn");
+        if(clrAll){
+          Object.keys(SELECTED).forEach(k => SELECTED[k]=[]);
+          renderDashboard();
+          return;
+        }
+      });
+    });
+
+  })();
+  </script>
+</body>
+</html>

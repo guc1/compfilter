@@ -1,0 +1,31 @@
+compenv/
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+*.log
+
+# local data (keep off GitHub)
+*.csv
+*.parquet
+*.feather
+*.xlsx
+*.xls
+*.zip
+*.tar.gz
+*.tgz
+
+# polygons & uploads kept local
+backend/filterscripts/data/*.geojson
+backend/filterscripts/data/custom_aoi/*.geojson
+
+# snapshots/exports
+Compfilter_snapshot_*.md
+*.pdf
+*.png
+*.jpg
+*.jpeg
+
+# editor junk
+.vscode/
+.idea/
