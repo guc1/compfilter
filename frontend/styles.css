@@ -15,6 +15,7 @@ button:hover { background:#2c5282; }
 .filter-btn { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:12px; border:1px solid #2c313a; border-radius:10px; background:#0f1116; cursor:pointer; }
 .filter-btn:hover { border-color:#3b4150; }
 
+.hidden { display: none !important; }
 .panel.hidden { display:none; }
 .panel-header { display:grid; grid-template-columns: 1fr auto 1fr; align-items:center; margin-bottom:12px; }
 
