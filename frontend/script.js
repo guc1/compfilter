@@ -6,6 +6,7 @@ let FILTER_OPTIONS = {};   // key -> [options]
 let SELECTED = {};         // key -> [] OR custom per filter
 let ACTIVE_KEY = null;
 let SBI_FILES = { main: [], sub: [], all: [] };
+let LAST_PREVIEW_COUNT = null;
 
 const SBI_BUCKETS = [
   { id: "main", label: "Main SBI" },
@@ -654,13 +655,22 @@ async function loadFilters(){
 
 async function doPreview(){
   $("#previewOut").textContent = "…";
-  const res = await fetch(API("/api/preview"), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ selected: SELECTED })
-  });
-  const data = await res.json();
-  $("#previewOut").textContent = `${data.count.toLocaleString()} rows`;
+  try{
+    const res = await fetch(API("/api/preview"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ selected: SELECTED })
+    });
+    const data = await res.json();
+    const count = typeof data.count === "number" ? data.count : Number.parseInt(data.count, 10) || 0;
+    LAST_PREVIEW_COUNT = count;
+    $("#previewOut").textContent = `${count.toLocaleString()} rows`;
+  }catch(err){
+    console.error('Preview failed', err);
+    LAST_PREVIEW_COUNT = null;
+    $("#previewOut").textContent = "Error";
+  }
+  updateCustomSaveEstimate();
 }
 
 async function doDownload(){
@@ -678,6 +688,118 @@ async function doDownload(){
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
+}
+
+function setCustomSaveVisible(show){
+  const panel = document.getElementById('customSavePanel');
+  if(!panel) return;
+  panel.classList.toggle('hidden', !show);
+  if(show){
+    setCustomSaveStatus('');
+    updateCustomSaveEstimate();
+  }
+}
+
+function toggleCustomSavePanel(){
+  const panel = document.getElementById('customSavePanel');
+  if(!panel) return;
+  const willShow = panel.classList.contains('hidden');
+  setCustomSaveVisible(willShow);
+}
+
+function updateCustomSaveEstimate(){
+  const out = document.getElementById('customFileEstimate');
+  if(!out) return;
+  const maxRowsInput = document.getElementById('customMaxRows');
+  const raw = (maxRowsInput && maxRowsInput.value ? maxRowsInput.value : '').trim();
+  if(!raw){
+    out.textContent = 'Enter max rows to estimate.';
+    return;
+  }
+  const maxRows = Number.parseInt(raw, 10);
+  if(!Number.isFinite(maxRows) || maxRows <= 0){
+    out.textContent = 'Max rows must be a positive number.';
+    return;
+  }
+  if(typeof LAST_PREVIEW_COUNT === 'number'){
+    const total = LAST_PREVIEW_COUNT;
+    if(total <= 0){
+      out.textContent = '0 files (no rows to save).';
+    } else {
+      const files = Math.ceil(total / maxRows);
+      const word = files === 1 ? 'file' : 'files';
+      out.textContent = `${files} ${word} from ${total.toLocaleString()} rows.`;
+    }
+  } else {
+    out.textContent = 'Run a preview to estimate file count.';
+  }
+}
+
+function setCustomSaveStatus(message, isError = false){
+  const statusEl = document.getElementById('customSaveStatus');
+  if(!statusEl) return;
+  statusEl.textContent = message || '';
+  statusEl.classList.toggle('status-error', Boolean(isError));
+}
+
+async function doCustomSave(){
+  const pathInput = document.getElementById('customSavePath');
+  const baseInput = document.getElementById('customBaseName');
+  const maxRowsInput = document.getElementById('customMaxRows');
+  const runBtn = document.getElementById('customSaveRun');
+
+  const directory = pathInput ? pathInput.value.trim() : '';
+  const baseName = baseInput ? baseInput.value.trim() : '';
+  const maxRowsRaw = maxRowsInput ? maxRowsInput.value.trim() : '';
+  const maxRows = Number.parseInt(maxRowsRaw, 10);
+
+  if(!directory){
+    setCustomSaveStatus('Provide a save directory.', true);
+    return;
+  }
+  if(!baseName){
+    setCustomSaveStatus('Provide a base filename.', true);
+    return;
+  }
+  if(!Number.isFinite(maxRows) || maxRows <= 0){
+    setCustomSaveStatus('Max rows per file must be a positive number.', true);
+    return;
+  }
+
+  setCustomSaveStatus('Saving…');
+  if(runBtn) runBtn.disabled = true;
+
+  try{
+    const res = await fetch(API('/api/save'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        selected: SELECTED,
+        directory,
+        baseName,
+        maxRowsPerFile: maxRows,
+      })
+    });
+    let data = {};
+    try{ data = await res.json(); } catch(_){ data = {}; }
+    if(!res.ok || !data.ok){
+      throw new Error(data.error || res.statusText || 'Save failed');
+    }
+    const files = Array.isArray(data.files) ? data.files : [];
+    const created = typeof data.created_files === 'number' ? data.created_files : files.length;
+    const totalRows = typeof data.total_rows === 'number' ? data.total_rows : null;
+    const parts = [];
+    parts.push(`Saved ${created} file${created === 1 ? '' : 's'}`);
+    if(typeof totalRows === 'number'){
+      parts.push(`${totalRows.toLocaleString()} rows total`);
+    }
+    setCustomSaveStatus(parts.join(' · '));
+  }catch(err){
+    console.error('Custom save failed', err);
+    setCustomSaveStatus('Save failed: ' + (err && err.message ? err.message : err), true);
+  }finally{
+    if(runBtn) runBtn.disabled = false;
+  }
 }
 
 function ensureLocationSelection(label){
@@ -767,6 +889,15 @@ document.addEventListener("DOMContentLoaded", () => {
   loadFilters();
   $("#previewBtn")?.addEventListener("click", doPreview);
   $("#downloadBtn")?.addEventListener("click", doDownload);
+  $("#customSaveToggle")?.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    toggleCustomSavePanel();
+  });
+  $("#customMaxRows")?.addEventListener("input", updateCustomSaveEstimate);
+  $("#customSaveRun")?.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    doCustomSave();
+  });
   $("#backBtn")?.addEventListener("click", () => closePanel(false));
   $("#saveBtn")?.addEventListener("click", () => closePanel(true));
   $("#aoiUploadBtn")?.addEventListener("click", handleLocationUpload);

@@ -1,7 +1,8 @@
 """Combinator: orchestrates filters and streaming read/write (CSV-safe)."""
 import csv
+import re
 from pathlib import Path
-from typing import Dict, List, Generator, Iterable
+from typing import Dict, List, Generator, Iterable, Tuple
 
 from ..config import CSV_PATH, CSV_DELIMITER, CSV_ENCODING
 
@@ -83,12 +84,17 @@ def _stream_rows(csv_path: Path):
 
 def preview_count(selected_filters: Dict[str, List[str]]) -> int:
     header, rows = _stream_rows(CSV_PATH)
+    filtered = _apply_filters(rows, header, selected_filters)
+    return sum(1 for _ in filtered)
+
+def _apply_filters(rows: Iterable[List[str]], header: List[str], selected_filters: Dict[str, List[str]]) -> Iterable[List[str]]:
     filtered: Iterable[List[str]] = rows
     for k, selected in selected_filters.items():
         mod = FILTERS.get(k)
         if mod:
             filtered = mod.apply(filtered, header, selected)
-    return sum(1 for _ in filtered)
+    return filtered
+
 
 def stream_filtered_csv(selected_filters: Dict[str, List[str]]) -> Generator[str, None, None]:
     """Yield properly quoted CSV lines with CRLF line endings and a UTF-8 BOM."""
@@ -115,12 +121,91 @@ def stream_filtered_csv(selected_filters: Dict[str, List[str]]) -> Generator[str
     yield writer_line(header)
 
     # Apply filters (AND)
-    filtered: Iterable[List[str]] = rows
-    for k, selected in selected_filters.items():
-        mod = FILTERS.get(k)
-        if mod:
-            filtered = mod.apply(filtered, header, selected)
+    filtered = _apply_filters(rows, header, selected_filters)
 
     # Rows
     for row in filtered:
         yield writer_line(row)
+
+
+def _sanitize_basename(base_name: str) -> str:
+    """Ensure the file stem is filesystem friendly."""
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "_", base_name).strip("._-")
+    return stem or "results"
+
+
+def save_filtered_csv(
+    selected_filters: Dict[str, List[str]],
+    directory: Path,
+    base_name: str,
+    max_rows_per_file: int,
+) -> Tuple[List[Path], int]:
+    """Save filtered results into chunked CSV files.
+
+    Returns (list_of_files, total_rows_written).
+    """
+    if max_rows_per_file <= 0:
+        raise ValueError("max_rows_per_file must be greater than zero")
+
+    safe_base = _sanitize_basename(base_name)
+    target_dir = directory.expanduser().resolve()
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    header, rows = _stream_rows(CSV_PATH)
+    filtered = _apply_filters(rows, header, selected_filters)
+
+    created_files: List[Path] = []
+    total_rows = 0
+    file_index = 0
+    current_writer = None
+    current_handle = None
+    current_count = 0
+
+    def start_new_file(idx: int):
+        fname = f"{safe_base}{idx}.csv"
+        path = target_dir / fname
+        handle = path.open("w", encoding=CSV_ENCODING, newline="")
+        handle.write("\ufeff")
+        writer = csv.writer(
+            handle,
+            delimiter=CSV_DELIMITER,
+            quotechar='"',
+            lineterminator="\r\n",
+            quoting=csv.QUOTE_MINIMAL,
+            doublequote=True,
+            escapechar=None,
+        )
+        writer.writerow(header)
+        return path, handle, writer
+
+    try:
+        for row in filtered:
+            if current_writer is None or current_count >= max_rows_per_file:
+                if current_handle:
+                    current_handle.close()
+                file_index += 1
+                path, handle, writer = start_new_file(file_index)
+                created_files.append(path)
+                current_handle = handle
+                current_writer = writer
+                current_count = 0
+
+            current_writer.writerow(row)
+            total_rows += 1
+            current_count += 1
+
+        # If no rows were written we still create an empty file with just the header
+        if total_rows == 0:
+            if current_handle:
+                current_handle.close()
+            file_index = 1
+            path, handle, writer = start_new_file(file_index)
+            created_files.append(path)
+            current_handle = handle
+            current_writer = writer
+
+    finally:
+        if current_handle:
+            current_handle.close()
+
+    return created_files, total_rows
