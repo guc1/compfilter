@@ -3,16 +3,156 @@ const API = (path) => `${location.origin}${path}`;
 
 let FILTERS_META = [];     // [{key,label,type}]
 let FILTER_OPTIONS = {};   // key -> [options]
-let SELECTED = {};         // key -> [] OR ["min","max"] OR tokens for group
+let SELECTED = {};         // key -> [] OR custom per filter
 let ACTIVE_KEY = null;
+let SBI_FILES = { main: [], sub: [], all: [] };
+
+const SBI_BUCKETS = [
+  { id: "main", label: "Main SBI" },
+  { id: "sub",  label: "Sub SBI"  },
+  { id: "all",  label: "All SBI"  }
+];
 
 function getMeta(key){
   return FILTERS_META.find(f => f.key === key) || { key, label: key, type: "multiselect" };
 }
 
+function ensureSbiState(){
+  SELECTED.sbi = normalizeSbiSelection(SELECTED.sbi);
+}
+
+function clearSelection(key){
+  const meta = getMeta(key);
+  if(meta.type === "sbi"){
+    ensureSbiState();
+    SELECTED[key] = baseSbiSelection();
+  } else {
+    SELECTED[key] = [];
+  }
+}
+
+function baseSbiSelection(){
+  return {
+    main: { codes: [], file: null },
+    sub:  { codes: [], file: null },
+    all:  { codes: [], file: null }
+  };
+}
+
+function normalizeSbiSelection(sel){
+  const base = baseSbiSelection();
+  if(!sel || typeof sel !== "object") return base;
+  SBI_BUCKETS.forEach(({id}) => {
+    const bucket = sel[id];
+    if(bucket && typeof bucket === "object"){
+      const codes = Array.isArray(bucket.codes) ? bucket.codes.filter(v => typeof v === "string" && v.trim()) : [];
+      base[id].codes = codes.map(v => v.trim());
+      const file = bucket.file;
+      base[id].file = (typeof file === "string" && file.trim()) ? file.trim() : null;
+    }
+  });
+  return base;
+}
+
+function hasSbiSelection(sel){
+  const norm = normalizeSbiSelection(sel);
+  return SBI_BUCKETS.some(({id}) => (norm[id].codes && norm[id].codes.length) || norm[id].file);
+}
+
+function summarizeSbiSelection(sel){
+  const norm = normalizeSbiSelection(sel);
+  const parts = [];
+  SBI_BUCKETS.forEach(({id, label}) => {
+    const codes = norm[id].codes ? norm[id].codes.length : 0;
+    const file = norm[id].file ? 1 : 0;
+    if(codes || file){
+      const detail = [];
+      if(codes) detail.push(`${codes} code${codes === 1 ? "" : "s"}`);
+      if(file) detail.push(`file`);
+      parts.push(`${label.split(" ")[0]}: ${detail.join(" + ")}`);
+    }
+  });
+  return parts.length ? parts.join(" · ") : "x";
+}
+
+function parseSbiManualCodes(raw){
+  if(!raw) return [];
+  const parts = raw.split(/[\s,;]+/).map(v => v.trim()).filter(Boolean);
+  const seen = new Set();
+  const out = [];
+  parts.forEach(code => {
+    if(!seen.has(code)){
+      seen.add(code);
+      out.push(code);
+    }
+  });
+  return out;
+}
+
+function setSbiSelectOptions(selectEl, bucket, selected){
+  if(!selectEl) return;
+  const opts = Array.isArray(SBI_FILES[bucket]) ? SBI_FILES[bucket] : [];
+  selectEl.innerHTML = "";
+  const none = document.createElement("option");
+  none.value = "";
+  none.textContent = "-- None --";
+  selectEl.appendChild(none);
+  opts.forEach(name => {
+    const opt = document.createElement("option");
+    opt.value = name;
+    opt.textContent = name;
+    if(name === selected) opt.selected = true;
+    selectEl.appendChild(opt);
+  });
+  if(selected && !opts.includes(selected)){
+    const opt = document.createElement("option");
+    opt.value = selected;
+    opt.textContent = selected;
+    opt.selected = true;
+    selectEl.appendChild(opt);
+  }
+  if(!selected) selectEl.value = "";
+}
+
+async function refreshSbiFiles(){
+  try{
+    const res = await fetch(API("/api/sbi/files"));
+    const data = await res.json();
+    if(data && data.ok && data.files){
+      SBI_FILES = {
+        main: Array.isArray(data.files.main) ? data.files.main : [],
+        sub: Array.isArray(data.files.sub) ? data.files.sub : [],
+        all: Array.isArray(data.files.all) ? data.files.all : []
+      };
+    }
+  }catch(err){
+    console.error("Failed to load SBI files", err);
+  }
+}
+
+async function uploadSbiFile(bucket, file){
+  const form = new FormData();
+  form.append("bucket", bucket);
+  form.append("file", file);
+  const res = await fetch(API("/api/sbi/upload"), {
+    method: "POST",
+    body: form
+  });
+  let data = {};
+  try{ data = await res.json(); } catch(_){ data = {}; }
+  if(!res.ok || !data.ok){
+    throw new Error(data.error || res.statusText || "Upload failed");
+  }
+  await refreshSbiFiles();
+  return data.stored_as;
+}
+
 function summarizeSelection(key){
   const meta = getMeta(key);
-  const sel = SELECTED[key] || [];
+  if(meta.type === "sbi"){
+    return summarizeSbiSelection(SELECTED[key]);
+  }
+  const sel = Array.isArray(SELECTED[key]) ? SELECTED[key] : [];
   if(meta.type === "number"){
     const mn = sel[0] ?? "";
     const mx = sel[1] ?? "";
@@ -68,8 +208,14 @@ function renderDashboard(){
   if(!summaryHost) return;
   const chips = [];
   Object.entries(SELECTED).forEach(([k,v]) => {
-    if(!v || v.length === 0) return;
     const meta = getMeta(k);
+    let active = false;
+    if(meta.type === "sbi"){
+      active = hasSbiSelection(v);
+    } else {
+      active = Array.isArray(v) && v.length > 0;
+    }
+    if(!active) return;
     chips.push(`<span class="chip" data-key="${k}">${meta.label}: ${summarizeSelection(k)}<button class="chip-x" data-clearkey="${k}" title="Clear">×</button></span>`);
   });
   const hasAny = chips.length > 0;
@@ -216,6 +362,103 @@ function openPanel(key, force=false){
 
       $("#panelHint").textContent = "Pick gebruiksdoel + flags + range as needed. Save selection to apply.";
     }
+  } else if (meta.type === "sbi"){
+    ensureSbiState();
+    const current = normalizeSbiSelection(SELECTED[key]);
+    const wrap = document.createElement("div");
+    wrap.className = "sbi-panel-grid";
+    SBI_BUCKETS.forEach(({id, label}) => {
+      const section = document.createElement("div");
+      section.className = "card sbi-section";
+
+      const title = document.createElement("div");
+      title.className = "sbi-section-title";
+      title.textContent = label;
+      section.appendChild(title);
+
+      const manualLabel = document.createElement("div");
+      manualLabel.className = "muted";
+      manualLabel.textContent = "Manual codes (comma or newline separated)";
+      section.appendChild(manualLabel);
+
+      const textarea = document.createElement("textarea");
+      textarea.className = "sbi-codes";
+      textarea.dataset.bucket = id;
+      textarea.placeholder = "e.g. 73110";
+      textarea.value = (current[id].codes || []).join("\n");
+      section.appendChild(textarea);
+
+      const fileLabel = document.createElement("div");
+      fileLabel.className = "muted sbi-file-label";
+      fileLabel.textContent = "Use uploaded list";
+      section.appendChild(fileLabel);
+
+      const fileRow = document.createElement("div");
+      fileRow.className = "sbi-file-row";
+      const select = document.createElement("select");
+      select.className = "sbi-file-select";
+      select.dataset.bucket = id;
+      setSbiSelectOptions(select, id, current[id].file);
+      fileRow.appendChild(select);
+      const clearBtn = document.createElement("button");
+      clearBtn.type = "button";
+      clearBtn.className = "sbi-clear-file";
+      clearBtn.dataset.bucket = id;
+      clearBtn.textContent = "Clear";
+      clearBtn.addEventListener("click", () => {
+        select.value = "";
+      });
+      fileRow.appendChild(clearBtn);
+      section.appendChild(fileRow);
+
+      const uploadRow = document.createElement("div");
+      uploadRow.className = "sbi-upload-row";
+      const fileInput = document.createElement("input");
+      fileInput.type = "file";
+      fileInput.accept = ".csv,.txt";
+      fileInput.className = "sbi-upload-input";
+      fileInput.dataset.bucket = id;
+      uploadRow.appendChild(fileInput);
+      const uploadBtn = document.createElement("button");
+      uploadBtn.type = "button";
+      uploadBtn.className = "sbi-upload-btn";
+      uploadBtn.dataset.bucket = id;
+      uploadBtn.textContent = "Upload";
+      uploadRow.appendChild(uploadBtn);
+      section.appendChild(uploadRow);
+
+      const hint = document.createElement("div");
+      hint.className = "muted sbi-upload-hint";
+      hint.textContent = "Upload a CSV with the codes in the first column.";
+      section.appendChild(hint);
+
+      const status = document.createElement("div");
+      status.className = "muted sbi-status";
+      status.dataset.bucket = id;
+      section.appendChild(status);
+
+      uploadBtn.addEventListener("click", async () => {
+        const file = fileInput.files && fileInput.files[0];
+        if(!file){
+          status.textContent = "Select a CSV file first.";
+          return;
+        }
+        status.textContent = "Uploading…";
+        try{
+          const stored = await uploadSbiFile(id, file);
+          setSbiSelectOptions(select, id, stored);
+          fileInput.value = "";
+          status.textContent = `Uploaded as ${stored}.`;
+        }catch(err){
+          console.error("SBI upload failed", err);
+          status.textContent = err && err.message ? err.message : "Upload failed";
+        }
+      });
+
+      wrap.appendChild(section);
+    });
+    host.appendChild(wrap);
+    $("#panelHint").textContent = "Enter codes or upload CSV lists. Save selection to apply.";
   } else {
     const toolbar = document.createElement("div");
     toolbar.className = "mini-actions";
@@ -321,6 +564,17 @@ function closePanel(save=false){
       const norm = (v) => (v.toLowerCase && v.toLowerCase() === "x") ? "" : v;
       const a = norm(mn), b = norm(mx);
       SELECTED[ACTIVE_KEY] = (!a && !b) ? [] : [a, b];
+    } else if (meta.type === "sbi"){
+      ensureSbiState();
+      const payload = baseSbiSelection();
+      SBI_BUCKETS.forEach(({id}) => {
+        const textarea = document.querySelector(`#panelOptions textarea.sbi-codes[data-bucket="${id}"]`);
+        const select = document.querySelector(`#panelOptions select.sbi-file-select[data-bucket="${id}"]`);
+        payload[id].codes = parseSbiManualCodes(textarea ? textarea.value : "");
+        const selectedFile = select && typeof select.value === "string" ? select.value.trim() : "";
+        payload[id].file = selectedFile ? selectedFile : null;
+      });
+      SELECTED[ACTIVE_KEY] = payload;
     } else if (meta.type === "group"){
       if(ACTIVE_KEY === 'overige'){
         const tokens = [];
@@ -368,11 +622,22 @@ async function loadFilters(){
   const data = await res.json();
   FILTERS_META = data.filters || [];
   FILTER_OPTIONS = data.options || {};
-  FILTERS_META.forEach(f => { if(!SELECTED[f.key]) SELECTED[f.key] = []; });
+  FILTERS_META.forEach(f => {
+    if(SELECTED[f.key] === undefined){
+      if(f.type === "sbi"){
+        SELECTED[f.key] = baseSbiSelection();
+      } else {
+        SELECTED[f.key] = [];
+      }
+    } else if(f.type === "sbi"){
+      SELECTED[f.key] = normalizeSbiSelection(SELECTED[f.key]);
+    }
+  });
   if(Array.isArray(SELECTED.location)){
     const valid = new Set(FILTER_OPTIONS.location || []);
     SELECTED.location = SELECTED.location.filter(v => valid.has(v));
   }
+  await refreshSbiFiles();
   renderDashboard();
 }
 
@@ -500,13 +765,15 @@ document.addEventListener("DOMContentLoaded", () => {
     const xBtn = e.target.closest(".chip-x");
     if(xBtn && xBtn.dataset.clearkey){
       const k = xBtn.dataset.clearkey;
-      if(SELECTED[k]) SELECTED[k] = [];
+      if(SELECTED[k] !== undefined){
+        clearSelection(k);
+      }
       renderDashboard();
       return;
     }
     const clrAll = e.target.closest("#clearAllBtn");
     if(clrAll){
-      Object.keys(SELECTED).forEach(k => SELECTED[k] = []);
+      Object.keys(SELECTED).forEach(k => clearSelection(k));
       renderDashboard();
     }
   });

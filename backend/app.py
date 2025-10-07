@@ -122,6 +122,48 @@ def api_location_delete():
 
     return jsonify({'ok': True, 'removed': target.name})
 
+
+@app.route("/api/sbi/files", methods=["GET"])
+def api_sbi_files():
+    try:
+        from backend.filterscripts import sbi_filter
+        files = sbi_filter.list_uploaded_files()
+        return jsonify({"ok": True, "files": files})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/sbi/upload", methods=["POST"])
+def api_sbi_upload():
+    import re
+
+    bucket = (request.form.get('bucket') or '').strip().lower()
+    try:
+        from backend.filterscripts import sbi_filter
+        if bucket not in sbi_filter.BUCKETS:
+            return jsonify({'ok': False, 'error': 'Invalid SBI bucket'}), 400
+    except Exception as exc:
+        return jsonify({'ok': False, 'error': str(exc)}), 500
+
+    if 'file' not in request.files:
+        return jsonify({'ok': False, 'error': 'No file part'}), 400
+    f = request.files['file']
+    if not f or not f.filename:
+        return jsonify({'ok': False, 'error': 'No selected file'}), 400
+
+    name = f.filename
+    if not re.search(r"\.(csv|txt)$", name, re.IGNORECASE):
+        return jsonify({'ok': False, 'error': 'Upload must be a CSV file'}), 400
+
+    try:
+        stored = sbi_filter.save_uploaded_csv(bucket, name, f.read())
+    except ValueError as ve:
+        return jsonify({'ok': False, 'error': str(ve)}), 400
+    except Exception as e:
+        return jsonify({'ok': False, 'error': f'Failed to save file: {e}'}), 500
+
+    return jsonify({'ok': True, 'stored_as': stored, 'bucket': bucket})
+
 if __name__ == "__main__":
     print("▶ Starting Compfilter on http://127.0.0.1:3004")
     app.run(host="127.0.0.1", port=3004, debug=True)

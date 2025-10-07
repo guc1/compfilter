@@ -16,6 +16,7 @@ from . import (
     traditional_outreach_filter,
     vestiging_filter,
     overige_filter,
+    sbi_filter,
 )
 
 # Register filters in the order you want them shown
@@ -29,6 +30,7 @@ FILTERS: Dict[str, object] = {
     traditional_outreach_filter.name(): traditional_outreach_filter,
     vestiging_filter.name(): vestiging_filter,
     overige_filter.name(): overige_filter,
+    sbi_filter.name(): sbi_filter,
 }
 
 # Display meta
@@ -42,6 +44,7 @@ FILTER_META: Dict[str, Dict[str, str]] = {
     "traditional_outreach": {"label": "Traditional outreach","type": "multiselect"},
     "vestiging":            {"label": "Vestiging",           "type": "group"},
     "overige":              {"label": "Overige",             "type": "group"},
+    "sbi":                  {"label": "SBI",                "type": "sbi"},
 }
 
 def list_filters() -> List[Dict]:
