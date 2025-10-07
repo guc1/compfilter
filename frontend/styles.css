@@ -43,3 +43,18 @@ button:hover { background:#2c5282; }
 .custom-remove-btn { background:#402a2a; border:1px solid #5a3434; color:#f8d7da; padding:6px 10px; border-radius:8px; cursor:pointer; }
 .custom-remove-btn:hover { background:#5a3434; }
 .custom-empty { font-size:12px; padding:6px 0 0 2px; }
+
+.sbi-panel-grid { display:grid; gap:12px; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); }
+.sbi-section { display:flex; flex-direction:column; gap:8px; }
+.sbi-section-title { font-weight:600; font-size:15px; color:#e6edf3; }
+.sbi-codes { width:100%; min-height:90px; resize:vertical; background:#0f1116; border:1px solid #2c313a; border-radius:8px; color:#e6edf3; padding:8px; font-family:inherit; font-size:14px; }
+.sbi-file-row { display:flex; align-items:center; gap:8px; }
+.sbi-file-select { flex:1 1 auto; background:#0f1116; border:1px solid #2c313a; border-radius:8px; color:#e6edf3; padding:8px; }
+.sbi-clear-file { background:#1f232b; border:1px solid #2c313a; color:#e6edf3; padding:6px 10px; border-radius:8px; cursor:pointer; }
+.sbi-clear-file:hover { background:#2a2f3a; }
+.sbi-upload-row { display:flex; align-items:center; gap:8px; }
+.sbi-upload-input { flex:1 1 auto; background:#0f1116; border:1px solid #2c313a; border-radius:8px; color:#e6edf3; padding:8px; }
+.sbi-upload-btn { background:#2b6cb0; border:none; color:#fff; padding:8px 12px; border-radius:8px; cursor:pointer; }
+.sbi-upload-btn:hover { background:#2c5282; }
+.sbi-upload-hint { font-size:12px; }
+.sbi-status { font-size:12px; min-height:16px; }
