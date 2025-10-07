@@ -49,7 +49,7 @@ def api_download():
 
 @app.route("/api/location/upload", methods=["POST"])
 def api_location_upload():
-    from flask import request, jsonify
+    from flask import jsonify
     import json, re
     from pathlib import Path as _P
 
@@ -85,6 +85,42 @@ def api_location_upload():
     except Exception as _e:
         print('[UPLOAD] invalidate_cache warning:', _e)
     return jsonify({'ok': True, 'stored_as': out.name})
+
+
+@app.route("/api/location/delete", methods=["POST"])
+def api_location_delete():
+    from flask import jsonify
+    import re
+    from pathlib import Path as _P
+
+    payload = request.get_json(silent=True) or {}
+    label = str(payload.get('label') or '').strip()
+    if not label.startswith('custom:'):
+        return jsonify({'ok': False, 'error': 'Only custom areas can be removed'}), 400
+
+    stem = label.split('custom:', 1)[1]
+    if not stem:
+        return jsonify({'ok': False, 'error': 'Missing custom area name'}), 400
+    if not re.fullmatch(r'[A-Za-z0-9._-]+', stem):
+        return jsonify({'ok': False, 'error': 'Invalid custom area name'}), 400
+
+    save_dir = _P(__file__).with_name('filterscripts') / 'data' / 'custom_aoi'
+    target = save_dir / f"{stem}.geojson"
+    if not target.exists():
+        return jsonify({'ok': False, 'error': 'Custom area not found'}), 404
+
+    try:
+        target.unlink()
+    except Exception as e:
+        return jsonify({'ok': False, 'error': f'Failed to remove file: {e}'}), 500
+
+    try:
+        from backend.filterscripts import location_filter
+        location_filter.invalidate_cache()
+    except Exception as _e:
+        print('[DELETE] invalidate_cache warning:', _e)
+
+    return jsonify({'ok': True, 'removed': target.name})
 
 if __name__ == "__main__":
     print("▶ Starting Compfilter on http://127.0.0.1:3004")
