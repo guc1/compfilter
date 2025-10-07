@@ -227,18 +227,72 @@ function openPanel(key, force=false){
     `;
     host.appendChild(toolbar);
 
-    const optionsWrap = document.createElement("div");
-    optionsWrap.className = "grid";
     const options = FILTER_OPTIONS[key] || [];
     const selected = new Set(SELECTED[key] || []);
-    options.forEach(opt => {
+    const isLocation = key === "location";
+    const customOptions = isLocation ? options.filter(opt => opt.startsWith("custom:")) : [];
+    const baseOptions = isLocation ? options.filter(opt => !opt.startsWith("custom:")) : options;
+
+    const makeCheckbox = (opt) => {
       const id = `${key}__${opt.replace(/\s+/g,'_')}`;
       const wrap = document.createElement("label");
       wrap.className = "checkbox";
       wrap.innerHTML = `<input type="checkbox" class="panel-opt" id="${id}" ${selected.has(opt)?'checked':''} data-value="${opt}"> <span>${opt}</span>`;
-      optionsWrap.appendChild(wrap);
-    });
-    host.appendChild(optionsWrap);
+      return wrap;
+    };
+
+    if(isLocation){
+      if(baseOptions.length){
+        const header = document.createElement("div");
+        header.className = "muted custom-section-title";
+        header.textContent = "Provinces";
+        host.appendChild(header);
+        const baseWrap = document.createElement("div");
+        baseWrap.className = "grid";
+        baseOptions.forEach(opt => baseWrap.appendChild(makeCheckbox(opt)));
+        host.appendChild(baseWrap);
+      }
+
+      const customHeader = document.createElement("div");
+      customHeader.className = "muted custom-section-title";
+      customHeader.textContent = "Custom areas";
+      host.appendChild(customHeader);
+
+      if(customOptions.length){
+        const customWrap = document.createElement("div");
+        customWrap.className = "custom-aoi-list";
+        customOptions.forEach(opt => {
+          const row = document.createElement("div");
+          row.className = "custom-aoi-row";
+          const checkbox = makeCheckbox(opt);
+          checkbox.classList.add("custom-aoi-checkbox");
+          row.appendChild(checkbox);
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "custom-remove-btn";
+          btn.textContent = "Remove";
+          btn.dataset.label = opt;
+          btn.addEventListener("click", (evt) => {
+            evt.preventDefault();
+            evt.stopPropagation();
+            removeCustomArea(opt);
+          });
+          row.appendChild(btn);
+          customWrap.appendChild(row);
+        });
+        host.appendChild(customWrap);
+      } else {
+        const none = document.createElement("div");
+        none.className = "muted custom-empty";
+        none.textContent = "No custom areas uploaded yet.";
+        host.appendChild(none);
+      }
+    } else {
+      const optionsWrap = document.createElement("div");
+      optionsWrap.className = "grid";
+      baseOptions.forEach(opt => optionsWrap.appendChild(makeCheckbox(opt)));
+      host.appendChild(optionsWrap);
+    }
 
     toolbar.querySelector("#selectAllBtn").addEventListener("click", () => {
       host.querySelectorAll("input.panel-opt").forEach(ch => ch.checked = true);
@@ -247,7 +301,11 @@ function openPanel(key, force=false){
       host.querySelectorAll("input.panel-opt").forEach(ch => ch.checked = false);
     });
 
-    $("#panelHint").textContent = "Use Select all / Clear, then Save selection.";
+    if(isLocation){
+      $("#panelHint").textContent = "Tick provinces or custom AOIs. Use Remove to delete uploads.";
+    } else {
+      $("#panelHint").textContent = "Use Select all / Clear, then Save selection.";
+    }
   }
 
   $("#dashboard").classList.add("hidden");
@@ -311,6 +369,10 @@ async function loadFilters(){
   FILTERS_META = data.filters || [];
   FILTER_OPTIONS = data.options || {};
   FILTERS_META.forEach(f => { if(!SELECTED[f.key]) SELECTED[f.key] = []; });
+  if(Array.isArray(SELECTED.location)){
+    const valid = new Set(FILTER_OPTIONS.location || []);
+    SELECTED.location = SELECTED.location.filter(v => valid.has(v));
+  }
   renderDashboard();
 }
 
@@ -391,6 +453,37 @@ async function handleLocationUpload(){
     uploadBtn.disabled = false;
     uploadBtn.textContent = originalText;
     if(fileInput) fileInput.value = '';
+  }
+}
+
+async function removeCustomArea(label){
+  if(!label || !label.startsWith('custom:')){
+    return;
+  }
+  const confirmRemoval = window.confirm(`Remove ${label}? This deletes the uploaded file.`);
+  if(!confirmRemoval){
+    return;
+  }
+  try{
+    const res = await fetch('/api/location/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ label })
+    });
+    let data = {};
+    try { data = await res.json(); } catch(_){ data = {}; }
+    if(!res.ok || !data.ok){
+      alert('Remove failed: ' + (data.error || res.statusText || 'unknown'));
+      return;
+    }
+    if(Array.isArray(SELECTED.location)){
+      SELECTED.location = SELECTED.location.filter(v => v !== label);
+    }
+    await loadFilters();
+    openPanel('location', true);
+  }catch(err){
+    console.error('Remove error', err);
+    alert('Remove error: ' + (err && err.message ? err.message : err));
   }
 }
 

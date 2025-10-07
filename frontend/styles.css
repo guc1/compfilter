@@ -36,3 +36,10 @@ button:hover { background:#2c5282; }
 .clear-all:hover { background:#5a3434; }
 
 #aoiFile{background:#0f1116;border:1px solid #2c313a;color:#e6edf3;border-radius:8px;padding:8px;}
+.custom-section-title { margin-top:12px; margin-bottom:6px; font-size:13px; text-transform:uppercase; letter-spacing:0.06em; }
+.custom-aoi-list { display:flex; flex-direction:column; gap:8px; }
+.custom-aoi-row { display:flex; align-items:center; gap:10px; }
+.custom-aoi-row .checkbox { flex:1 1 auto; }
+.custom-remove-btn { background:#402a2a; border:1px solid #5a3434; color:#f8d7da; padding:6px 10px; border-radius:8px; cursor:pointer; }
+.custom-remove-btn:hover { background:#5a3434; }
+.custom-empty { font-size:12px; padding:6px 0 0 2px; }
