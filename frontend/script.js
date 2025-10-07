@@ -200,6 +200,12 @@ function renderDashboard(){
     btn.className = "filter-btn";
     btn.dataset.key = f.key;
     btn.innerHTML = `<span>${f.label}</span><span class="badge">${summarizeSelection(f.key)}</span>`;
+    if(f.key === ACTIVE_KEY){
+      btn.classList.add("is-active");
+      btn.setAttribute("aria-pressed", "true");
+    } else {
+      btn.setAttribute("aria-pressed", "false");
+    }
     btn.addEventListener("click", () => openPanel(f.key));
     btnHost.appendChild(btn);
   });
@@ -236,6 +242,11 @@ function openPanel(key, force=false){
   }
 
   ACTIVE_KEY = key;
+  document.querySelectorAll(".filter-btn").forEach(btn => {
+    if(!(btn instanceof HTMLElement)) return;
+    btn.classList.toggle("is-active", btn.dataset.key === key);
+    btn.setAttribute("aria-pressed", btn.dataset.key === key ? "true" : "false");
+  });
   updateAoiUploaderVisibility(key);
 
   const meta = getMeta(key);

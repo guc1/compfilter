@@ -8,44 +8,66 @@
 </head>
 <body>
   <div class="container">
-    <h1>Compfilter (prototype)</h1>
-    <p>Choose filters, preview row count, then download.</p>
+    <header class="hero card">
+      <div class="hero-text">
+        <h1>Compfilter (prototype)</h1>
+        <p class="lead">Streamlined filtering for millions of CSV rows — select exactly what you need, preview instantly, and download on demand.</p>
+      </div>
+      <div class="hero-tags">
+        <span class="hero-chip">⚡ Streaming safe</span>
+        <span class="hero-chip">🧭 Geo-ready</span>
+        <span class="hero-chip">🛡️ Local-first</span>
+      </div>
+    </header>
 
-    <div id="dashboard" class="card">
-      <h2 class="h2">Filters</h2>
+    <section id="dashboard" class="card glass">
+      <div class="card-header">
+        <div>
+          <h2 class="h2">Filters</h2>
+          <p class="card-subtitle">Open a filter to refine your dataset. Every change updates the summary below.</p>
+        </div>
+      </div>
       <div id="filterButtons" class="btn-grid"></div>
 
       <div id="activeSummary" class="summary"></div>
 
       <div class="actions">
-        <button id="previewBtn">Preview count</button>
-        <span id="previewOut" class="muted"></span>
-        <button id="downloadBtn">Download CSV</button>
+        <button id="previewBtn" class="btn secondary">
+          <span class="btn-icon" aria-hidden="true">👁️</span>
+          <span>Preview count</span>
+        </button>
+        <span id="previewOut" class="muted preview-indicator"></span>
+        <button id="downloadBtn" class="btn primary">
+          <span class="btn-icon" aria-hidden="true">⬇️</span>
+          <span>Download CSV</span>
+        </button>
       </div>
-    </div>
+    </section>
 
-    <div id="panel" class="card panel hidden">
+    <section id="panel" class="card panel hidden glass">
       <div class="panel-header">
-        <button id="backBtn" class="link-btn">← Back</button>
+        <button id="backBtn" class="btn ghost" type="button">← Back</button>
         <h3 id="panelTitle"></h3>
-        <div></div>
+        <div class="panel-hint muted">Selections save automatically when you click “Save selection”.</div>
       </div>
-      <div id="aoiUploaderContainer" class="card hidden" style="padding:12px;">
-  <div class="muted" style="margin-bottom:6px;">Custom area (GeoJSON, EPSG:4326)</div>
-  <div class="grid" style="grid-template-columns:1fr auto; gap:8px;">
-    <input id="aoiFile" type="file" accept=".geojson,application/geo+json" />
-    <button id="aoiUploadBtn" type="button">Upload</button>
-  </div>
-  <div class="muted" style="font-size:12px;margin-top:6px;">
-    After upload, your area appears in the list as <em>custom:&lt;filename&gt;</em>. Tick it and Save, or use Remove to delete it.
-  </div>
-</div>
-<div id="panelOptions"></div>
-      <div class="actions">
-        <button id="saveBtn">Save selection</button>
+      <div id="aoiUploaderContainer" class="panel-section hidden">
+        <h4 class="panel-section-title">Custom area (GeoJSON, EPSG:4326)</h4>
+        <div class="panel-section-body">
+          <div class="grid two">
+            <input id="aoiFile" type="file" accept=".geojson,application/geo+json" />
+            <button id="aoiUploadBtn" class="btn secondary" type="button">Upload</button>
+          </div>
+          <p class="muted smallprint">After upload, your area appears in the list as <em>custom:&lt;filename&gt;</em>. Tick it and save to apply, or use Remove to delete it.</p>
+        </div>
+      </div>
+      <div class="panel-body">
+        <div id="panelOptions" class="panel-options"></div>
+      </div>
+      <div class="panel-actions">
+        <button id="saveBtn" class="btn primary">Save selection</button>
         <span id="panelHint" class="muted"></span>
       </div>
-    </div>
+    </section>
   </div>
 
   <!-- Try external script first -->
