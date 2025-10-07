@@ -213,6 +213,27 @@ button:focus-visible {
   background: rgba(35, 46, 88, 0.9);
 }
 
+.btn.toggle {
+  padding: 12px 18px;
+  background: rgba(26, 32, 58, 0.82);
+  border: 1px solid rgba(118, 142, 255, 0.32);
+  box-shadow: none;
+}
+
+.btn.toggle:hover {
+  background: rgba(32, 40, 72, 0.88);
+}
+
+.btn.toggle.is-active {
+  background: linear-gradient(135deg, rgba(62, 168, 255, 0.92), rgba(34, 214, 198, 0.82));
+  border-color: rgba(94, 218, 255, 0.7);
+  box-shadow: 0 14px 32px rgba(38, 154, 214, 0.32);
+}
+
+.btn.toggle.is-active:hover {
+  background: linear-gradient(135deg, rgba(70, 180, 255, 0.96), rgba(46, 228, 208, 0.88));
+}
+
 .btn.ghost {
   background: rgba(20, 24, 40, 0.45);
   border: 1px solid rgba(120, 142, 255, 0.18);
@@ -243,6 +264,74 @@ button:focus-visible {
   border: 1px solid rgba(124, 144, 255, 0.28);
   background: rgba(14, 20, 40, 0.72);
   box-shadow: inset 0 0 0 1px rgba(68, 88, 158, 0.18);
+}
+
+.advanced-settings {
+  margin-top: 20px;
+  padding: 18px 20px 20px;
+  border-radius: 16px;
+  border: 1px solid rgba(124, 144, 255, 0.24);
+  background: rgba(14, 20, 40, 0.66);
+  box-shadow: inset 0 0 0 1px rgba(68, 88, 158, 0.16);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.advanced-header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.advanced-title {
+  margin: 0;
+  font-size: 16px;
+  letter-spacing: -0.01em;
+}
+
+.advanced-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: end;
+}
+
+@media (max-width: 720px) {
+  .advanced-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.advanced-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.advanced-field .label {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.advanced-field input {
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--control-border);
+  background: var(--control-bg);
+  color: var(--text-primary);
+  font: inherit;
+  transition: border-color 120ms var(--transition), box-shadow 160ms var(--transition);
+}
+
+.advanced-field input:focus {
+  border-color: var(--control-border-active);
+  box-shadow: 0 0 0 3px rgba(129, 148, 255, 0.18);
+  outline: none;
+}
+
+.advanced-status {
+  min-height: 16px;
 }
 
 .custom-save-grid {

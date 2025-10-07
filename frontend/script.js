@@ -8,6 +8,92 @@ let ACTIVE_KEY = null;
 let SBI_FILES = { main: [], sub: [], all: [] };
 let LAST_PREVIEW_COUNT = null;
 
+const ADVANCED_STATE = {
+  duplicatesPath: "",
+  filterDuplicates: false,
+};
+const ADVANCED_PATH_STORAGE_KEY = "compfilter.advanced.duplicatesPath";
+
+function getAdvancedPayload(){
+  return {
+    filterDuplicates: Boolean(ADVANCED_STATE.filterDuplicates),
+    duplicatesPath: ADVANCED_STATE.duplicatesPath || "",
+  };
+}
+
+function setAdvancedStatus(message, isError = false){
+  const statusEl = document.getElementById("advancedStatus");
+  if(!statusEl) return;
+  statusEl.textContent = message || "";
+  statusEl.classList.toggle("status-error", Boolean(isError));
+}
+
+function updateFilterDubsButton(){
+  const btn = document.getElementById("filterDubsBtn");
+  if(!btn) return;
+  const active = Boolean(ADVANCED_STATE.filterDuplicates);
+  btn.classList.toggle("is-active", active);
+  btn.setAttribute("aria-pressed", active ? "true" : "false");
+  btn.textContent = active ? "Filter dubs (on)" : "Filter dubs";
+}
+
+function setDuplicatesPath(rawValue){
+  const value = typeof rawValue === "string" ? rawValue.trim() : "";
+  ADVANCED_STATE.duplicatesPath = value;
+  try {
+    if(value){
+      localStorage.setItem(ADVANCED_PATH_STORAGE_KEY, value);
+    } else {
+      localStorage.removeItem(ADVANCED_PATH_STORAGE_KEY);
+    }
+  } catch(_err) {
+    // Ignore storage issues (private mode, etc.)
+  }
+}
+
+function handleDuplicatesPathInput(event){
+  const value = event && event.target ? event.target.value : "";
+  setDuplicatesPath(value);
+  if(!ADVANCED_STATE.filterDuplicates){
+    setAdvancedStatus("");
+  }
+}
+
+function handleDuplicatesPathChange(event){
+  const value = event && event.target ? event.target.value : "";
+  setDuplicatesPath(value);
+  if(ADVANCED_STATE.filterDuplicates){
+    if(ADVANCED_STATE.duplicatesPath){
+      doPreview();
+    } else {
+      setAdvancedStatus("Provide a folder path before filtering duplicates.", true);
+    }
+  }
+}
+
+async function toggleFilterDubs(){
+  const turningOn = !ADVANCED_STATE.filterDuplicates;
+  if(turningOn && !ADVANCED_STATE.duplicatesPath){
+    setAdvancedStatus("Provide a folder path before filtering duplicates.", true);
+    const input = document.getElementById("duplicatesPath");
+    if(input){
+      input.focus();
+    }
+    return;
+  }
+  ADVANCED_STATE.filterDuplicates = !ADVANCED_STATE.filterDuplicates;
+  updateFilterDubsButton();
+  if(!ADVANCED_STATE.filterDuplicates){
+    setAdvancedStatus("");
+  }
+  const success = await doPreview();
+  if(turningOn && !success){
+    ADVANCED_STATE.filterDuplicates = false;
+    updateFilterDubsButton();
+    await doPreview();
+  }
+}
+
 const SBI_BUCKETS = [
   { id: "main", label: "Main SBI" },
   { id: "sub",  label: "Sub SBI"  },
@@ -655,39 +741,76 @@ async function loadFilters(){
 
 async function doPreview(){
   $("#previewOut").textContent = "…";
+  let success = false;
   try{
     const res = await fetch(API("/api/preview"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ selected: SELECTED })
+      body: JSON.stringify({
+        selected: SELECTED,
+        advanced: getAdvancedPayload(),
+      })
     });
     const data = await res.json();
+    if(!res.ok || (data && data.ok === false)){
+      throw new Error((data && data.error) || res.statusText || "Preview failed");
+    }
     const count = typeof data.count === "number" ? data.count : Number.parseInt(data.count, 10) || 0;
     LAST_PREVIEW_COUNT = count;
     $("#previewOut").textContent = `${count.toLocaleString()} rows`;
+    if(ADVANCED_STATE.filterDuplicates){
+      const folder = ADVANCED_STATE.duplicatesPath;
+      const msg = folder ? `Filtering duplicates from: ${folder}` : "Filtering duplicates enabled.";
+      setAdvancedStatus(msg, false);
+    } else {
+      setAdvancedStatus("");
+    }
+    success = true;
   }catch(err){
     console.error('Preview failed', err);
     LAST_PREVIEW_COUNT = null;
     $("#previewOut").textContent = "Error";
+    setAdvancedStatus(err && err.message ? err.message : 'Preview failed', true);
   }
   updateCustomSaveEstimate();
+  return success;
 }
 
 async function doDownload(){
-  const res = await fetch(API("/api/download"), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ selected: SELECTED })
-  });
-  const blob = await res.blob();
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = "filtered_results.csv";
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
+  try{
+    const res = await fetch(API("/api/download"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        selected: SELECTED,
+        advanced: getAdvancedPayload(),
+      })
+    });
+    if(!res.ok){
+      let message = res.statusText || 'Download failed';
+      try{
+        const data = await res.json();
+        message = data && data.error ? data.error : message;
+      }catch(_err){
+        // ignore body parse errors
+      }
+      setAdvancedStatus(message, true);
+      alert('Download failed: ' + message);
+      return;
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "filtered_results.csv";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }catch(err){
+    console.error('Download failed', err);
+    setAdvancedStatus(err && err.message ? err.message : 'Download failed', true);
+  }
 }
 
 function setCustomSaveVisible(show){
@@ -778,6 +901,7 @@ async function doCustomSave(){
         directory,
         baseName,
         maxRowsPerFile: maxRows,
+        advanced: getAdvancedPayload(),
       })
     });
     let data = {};
@@ -794,9 +918,16 @@ async function doCustomSave(){
       parts.push(`${totalRows.toLocaleString()} rows total`);
     }
     setCustomSaveStatus(parts.join(' · '));
+    if(ADVANCED_STATE.filterDuplicates){
+      const folder = ADVANCED_STATE.duplicatesPath;
+      if(folder){
+        setAdvancedStatus(`Filtering duplicates from: ${folder}`, false);
+      }
+    }
   }catch(err){
     console.error('Custom save failed', err);
     setCustomSaveStatus('Save failed: ' + (err && err.message ? err.message : err), true);
+    setAdvancedStatus(err && err.message ? err.message : 'Save failed', true);
   }finally{
     if(runBtn) runBtn.disabled = false;
   }
@@ -889,6 +1020,13 @@ document.addEventListener("DOMContentLoaded", () => {
   loadFilters();
   $("#previewBtn")?.addEventListener("click", doPreview);
   $("#downloadBtn")?.addEventListener("click", doDownload);
+  $("#filterDubsBtn")?.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    toggleFilterDubs().catch((err) => {
+      console.error('Toggle duplicates failed', err);
+      setAdvancedStatus(err && err.message ? err.message : 'Failed to toggle duplicates', true);
+    });
+  });
   $("#customSaveToggle")?.addEventListener("click", (ev) => {
     ev.preventDefault();
     toggleCustomSavePanel();
@@ -902,6 +1040,28 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#saveBtn")?.addEventListener("click", () => closePanel(true));
   $("#aoiUploadBtn")?.addEventListener("click", handleLocationUpload);
   updateAoiUploaderVisibility(null);
+
+  const duplicatesInput = document.getElementById("duplicatesPath");
+  if(duplicatesInput){
+    try{
+      const stored = localStorage.getItem(ADVANCED_PATH_STORAGE_KEY);
+      if(stored){
+        duplicatesInput.value = stored;
+        setDuplicatesPath(stored);
+      } else {
+        setDuplicatesPath(duplicatesInput.value || "");
+      }
+    }catch(_err){
+      setDuplicatesPath(duplicatesInput.value || "");
+    }
+    duplicatesInput.addEventListener("input", handleDuplicatesPathInput);
+    duplicatesInput.addEventListener("change", handleDuplicatesPathChange);
+  } else {
+    setDuplicatesPath("");
+  }
+
+  updateFilterDubsButton();
+  setAdvancedStatus("");
 
   document.body.addEventListener("click", (e) => {
     const xBtn = e.target.closest(".chip-x");

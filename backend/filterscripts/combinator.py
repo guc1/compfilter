@@ -2,7 +2,7 @@
 import csv
 import re
 from pathlib import Path
-from typing import Dict, List, Generator, Iterable, Tuple
+from typing import Dict, List, Generator, Iterable, Tuple, Optional, Set
 
 from ..config import CSV_PATH, CSV_DELIMITER, CSV_ENCODING
 
@@ -70,6 +70,110 @@ def get_filter_options() -> Dict[str, List[str]]:
             opts[k] = []
     return opts
 
+
+_DUPLICATE_CACHE: Dict[str, Tuple[Tuple[Tuple[str, int, int], ...], Set[str]]] = {}
+_KVK_CANDIDATES = {"kvk", "kvknummer", "kvknr", "kvknumber"}
+
+
+def _normalize_column_name(name: str) -> str:
+    if name is None:
+        return ""
+    return re.sub(r"[^a-z0-9]", "", str(name).lstrip("\ufeff").lower())
+
+
+def _find_kvk_index(header: List[str]) -> Optional[int]:
+    for idx, col in enumerate(header):
+        normalized = _normalize_column_name(col)
+        if normalized in _KVK_CANDIDATES or normalized.startswith("kvk"):
+            return idx
+    return None
+
+
+def _folder_signature(files: List[Path]) -> Tuple[Tuple[str, int, int], ...]:
+    sig: List[Tuple[str, int, int]] = []
+    for f in files:
+        stat = f.stat()
+        sig.append((f.name, int(stat.st_size), int(getattr(stat, "st_mtime_ns", int(stat.st_mtime * 1_000_000_000)))))
+    return tuple(sig)
+
+
+def _load_existing_kvk_numbers(folder: Path) -> Set[str]:
+    resolved = folder.expanduser().resolve()
+    if not resolved.exists():
+        raise ValueError(f"Duplicates folder does not exist: {resolved}")
+    if not resolved.is_dir():
+        raise ValueError(f"Duplicates folder is not a directory: {resolved}")
+
+    files = [p for p in resolved.iterdir() if p.is_file() and p.suffix.lower() == ".csv"]
+    signature = _folder_signature(files)
+    cached = _DUPLICATE_CACHE.get(str(resolved))
+    if cached and cached[0] == signature:
+        return set(cached[1])
+
+    kvks: Set[str] = set()
+    skipped: List[str] = []
+    for csv_path in files:
+        try:
+            with csv_path.open("r", encoding=CSV_ENCODING, newline="") as handle:
+                reader = csv.reader(handle, delimiter=CSV_DELIMITER)
+                header = next(reader, None)
+                if not header:
+                    continue
+                if header and header[0]:
+                    header[0] = header[0].lstrip("\ufeff")
+                idx = _find_kvk_index(header)
+                if idx is None:
+                    skipped.append(csv_path.name)
+                    continue
+                for row in reader:
+                    if idx < len(row):
+                        kvk = row[idx].strip()
+                        if kvk:
+                            kvks.add(kvk)
+        except (OSError, UnicodeDecodeError, csv.Error) as exc:
+            raise ValueError(f"Failed to read {csv_path.name}: {exc}")
+
+    if skipped:
+        print(f"[DUPLICATES] skipped {len(skipped)} file(s) without KVK column: {', '.join(skipped[:5])}")
+
+    _DUPLICATE_CACHE[str(resolved)] = (signature, set(kvks))
+    return kvks
+
+
+def _coerce_bool(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
+def _apply_duplicate_filter(
+    rows: Iterable[List[str]],
+    header: List[str],
+    folder: str,
+) -> Iterable[List[str]]:
+    folder_str = str(folder or "").strip()
+    if not folder_str:
+        raise ValueError("Provide a folder path to filter duplicates.")
+    folder_path = Path(folder_str)
+    kvk_idx = _find_kvk_index(header)
+    if kvk_idx is None:
+        raise ValueError("Could not find a KVK column in the source CSV.")
+    existing = _load_existing_kvk_numbers(folder_path)
+
+    def _iter():
+        seen: Set[str] = set()
+        for row in rows:
+            kvk_val = row[kvk_idx].strip() if kvk_idx < len(row) else ""
+            if kvk_val:
+                if kvk_val in existing or kvk_val in seen:
+                    continue
+                seen.add(kvk_val)
+            yield row
+
+    return _iter()
+
 def _stream_rows(csv_path: Path):
     f = csv_path.open("r", encoding=CSV_ENCODING, newline="")
     rdr = csv.reader(f, delimiter=CSV_DELIMITER)
@@ -82,21 +186,50 @@ def _stream_rows(csv_path: Path):
             f.close()
     return header, _iter()
 
-def preview_count(selected_filters: Dict[str, List[str]]) -> int:
+def preview_count(
+    selected_filters: Dict[str, List[str]],
+    advanced: Optional[Dict[str, object]] = None,
+) -> int:
     header, rows = _stream_rows(CSV_PATH)
-    filtered = _apply_filters(rows, header, selected_filters)
+    filtered = _apply_filters(rows, header, selected_filters, advanced)
     return sum(1 for _ in filtered)
 
-def _apply_filters(rows: Iterable[List[str]], header: List[str], selected_filters: Dict[str, List[str]]) -> Iterable[List[str]]:
+def _apply_filters(
+    rows: Iterable[List[str]],
+    header: List[str],
+    selected_filters: Dict[str, List[str]],
+    advanced: Optional[Dict[str, object]] = None,
+) -> Iterable[List[str]]:
     filtered: Iterable[List[str]] = rows
     for k, selected in selected_filters.items():
         mod = FILTERS.get(k)
         if mod:
             filtered = mod.apply(filtered, header, selected)
+
+    adv = advanced or {}
+    filter_duplicates = (
+        adv.get("filterDuplicates")
+        if "filterDuplicates" in adv
+        else adv.get("filter_duplicates")
+    )
+    if filter_duplicates is None:
+        filter_duplicates = adv.get("filterDubs")
+    if _coerce_bool(filter_duplicates):
+        folder = (
+            adv.get("duplicatesPath")
+            or adv.get("duplicates_path")
+            or adv.get("folderPath")
+            or adv.get("folder_path")
+            or adv.get("folder")
+        )
+        filtered = _apply_duplicate_filter(filtered, header, folder)
     return filtered
 
 
-def stream_filtered_csv(selected_filters: Dict[str, List[str]]) -> Generator[str, None, None]:
+def stream_filtered_csv(
+    selected_filters: Dict[str, List[str]],
+    advanced: Optional[Dict[str, object]] = None,
+) -> Generator[str, None, None]:
     """Yield properly quoted CSV lines with CRLF line endings and a UTF-8 BOM."""
     import io
     header, rows = _stream_rows(CSV_PATH)
@@ -121,7 +254,7 @@ def stream_filtered_csv(selected_filters: Dict[str, List[str]]) -> Generator[str
     yield writer_line(header)
 
     # Apply filters (AND)
-    filtered = _apply_filters(rows, header, selected_filters)
+    filtered = _apply_filters(rows, header, selected_filters, advanced)
 
     # Rows
     for row in filtered:
@@ -139,6 +272,7 @@ def save_filtered_csv(
     directory: Path,
     base_name: str,
     max_rows_per_file: int,
+    advanced: Optional[Dict[str, object]] = None,
 ) -> Tuple[List[Path], int]:
     """Save filtered results into chunked CSV files.
 
@@ -152,7 +286,7 @@ def save_filtered_csv(
     target_dir.mkdir(parents=True, exist_ok=True)
 
     header, rows = _stream_rows(CSV_PATH)
-    filtered = _apply_filters(rows, header, selected_filters)
+    filtered = _apply_filters(rows, header, selected_filters, advanced)
 
     created_files: List[Path] = []
     total_rows = 0

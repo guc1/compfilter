@@ -32,15 +32,31 @@ def api_filters():
 
 @app.route("/api/preview", methods=["POST"])
 def api_preview():
-    sel = (request.get_json(silent=True) or {}).get("selected", {})
-    count = combinator.preview_count(sel)
-    return jsonify({"count": int(count)})
+    payload = request.get_json(silent=True) or {}
+    sel = payload.get("selected", {})
+    advanced = payload.get("advanced", {})
+    try:
+        count = combinator.preview_count(sel, advanced)
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    except OSError as exc:
+        return jsonify({"ok": False, "error": f"Filesystem error: {exc}"}), 500
+    return jsonify({"ok": True, "count": int(count)})
 
 @app.route("/api/download", methods=["POST"])
 def api_download():
-    sel = (request.get_json(silent=True) or {}).get("selected", {})
+    payload = request.get_json(silent=True) or {}
+    sel = payload.get("selected", {})
+    advanced = payload.get("advanced", {})
+    try:
+        stream = combinator.stream_filtered_csv(sel, advanced)
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    except OSError as exc:
+        return jsonify({"ok": False, "error": f"Filesystem error: {exc}"}), 500
+
     def gen():
-        for chunk in combinator.stream_filtered_csv(sel):
+        for chunk in stream:
             yield chunk
     headers = {
         "Content-Disposition": "attachment; filename=filtered_results.csv",
@@ -54,6 +70,7 @@ def api_download():
 def api_save():
     payload = request.get_json(silent=True) or {}
     sel = payload.get("selected", {})
+    advanced = payload.get("advanced", {})
     directory_raw = str(payload.get("directory") or "").strip()
     base_name = str(payload.get("baseName") or payload.get("basename") or "").strip()
     max_rows_raw = payload.get("maxRowsPerFile") or payload.get("max_rows_per_file")
@@ -69,7 +86,7 @@ def api_save():
 
     try:
         target_dir = Path(directory_raw)
-        files, total_rows = combinator.save_filtered_csv(sel, target_dir, base_name, max_rows)
+        files, total_rows = combinator.save_filtered_csv(sel, target_dir, base_name, max_rows, advanced)
     except ValueError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
     except PermissionError as exc:

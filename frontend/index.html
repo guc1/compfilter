@@ -47,6 +47,21 @@
         </button>
       </div>
 
+      <div id="advancedSettings" class="advanced-settings">
+        <div class="advanced-header">
+          <h3 class="advanced-title">Advanced settings</h3>
+          <p class="muted smallprint">Filter out rows whose KVK numbers already exist in a folder of previous exports.</p>
+        </div>
+        <div class="advanced-grid">
+          <label class="advanced-field">
+            <span class="label">Existing exports folder</span>
+            <input id="duplicatesPath" type="text" placeholder="/path/to/folder" autocomplete="off" />
+          </label>
+          <button id="filterDubsBtn" class="btn secondary toggle" type="button" aria-pressed="false">Filter dubs</button>
+        </div>
+        <div id="advancedStatus" class="muted smallprint advanced-status"></div>
+      </div>
+
       <div id="customSavePanel" class="custom-save hidden">
         <div class="custom-save-grid">
           <label class="custom-save-field">
