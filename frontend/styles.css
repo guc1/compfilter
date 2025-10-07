@@ -236,6 +236,68 @@ button:focus-visible {
   align-items: center;
 }
 
+.custom-save {
+  margin-top: 18px;
+  padding: 18px 18px 20px;
+  border-radius: 16px;
+  border: 1px solid rgba(124, 144, 255, 0.28);
+  background: rgba(14, 20, 40, 0.72);
+  box-shadow: inset 0 0 0 1px rgba(68, 88, 158, 0.18);
+}
+
+.custom-save-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.custom-save-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.custom-save-field .label {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.custom-save-field input {
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--control-border);
+  background: var(--control-bg);
+  color: var(--text-primary);
+  font: inherit;
+  transition: border-color 120ms var(--transition), box-shadow 160ms var(--transition);
+}
+
+.custom-save-field input:focus {
+  border-color: var(--control-border-active);
+  box-shadow: 0 0 0 3px rgba(129, 148, 255, 0.18);
+  outline: none;
+}
+
+.custom-save-field.estimate {
+  justify-content: flex-end;
+}
+
+.custom-save-actions {
+  margin-top: 18px;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.smallprint {
+  font-size: 12px;
+}
+
+.status-error {
+  color: #ff9a9a;
+}
+
 .muted {
   color: var(--text-muted);
 }

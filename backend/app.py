@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from flask import Flask, send_from_directory, jsonify, request, Response
 from backend.filterscripts import combinator
 
@@ -46,6 +48,43 @@ def api_download():
         "Cache-Control": "no-store"
     }
     return Response(gen(), headers=headers)
+
+
+@app.route("/api/save", methods=["POST"])
+def api_save():
+    payload = request.get_json(silent=True) or {}
+    sel = payload.get("selected", {})
+    directory_raw = str(payload.get("directory") or "").strip()
+    base_name = str(payload.get("baseName") or payload.get("basename") or "").strip()
+    max_rows_raw = payload.get("maxRowsPerFile") or payload.get("max_rows_per_file")
+
+    if not directory_raw:
+        return jsonify({"ok": False, "error": "Target directory is required"}), 400
+    if not base_name:
+        return jsonify({"ok": False, "error": "Base filename is required"}), 400
+    try:
+        max_rows = int(max_rows_raw)
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "Max rows per file must be an integer"}), 400
+
+    try:
+        target_dir = Path(directory_raw)
+        files, total_rows = combinator.save_filtered_csv(sel, target_dir, base_name, max_rows)
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    except PermissionError as exc:
+        return jsonify({"ok": False, "error": f"Permission denied: {exc}"}), 403
+    except OSError as exc:
+        return jsonify({"ok": False, "error": f"Filesystem error: {exc}"}), 500
+
+    return jsonify({
+        "ok": True,
+        "directory": str(Path(directory_raw).expanduser().resolve()),
+        "files": [str(p) for p in files],
+        "created_files": len(files),
+        "total_rows": total_rows,
+        "max_rows_per_file": max_rows,
+    })
 
 @app.route("/api/location/upload", methods=["POST"])
 def api_location_upload():

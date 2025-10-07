@@ -41,6 +41,35 @@
           <span class="btn-icon" aria-hidden="true">⬇️</span>
           <span>Download CSV</span>
         </button>
+        <button id="customSaveToggle" class="btn ghost">
+          <span class="btn-icon" aria-hidden="true">💾</span>
+          <span>Custom save…</span>
+        </button>
+      </div>
+
+      <div id="customSavePanel" class="custom-save hidden">
+        <div class="custom-save-grid">
+          <label class="custom-save-field">
+            <span class="label">Save directory</span>
+            <input id="customSavePath" type="text" placeholder="/path/to/folder" />
+          </label>
+          <label class="custom-save-field">
+            <span class="label">Base filename</span>
+            <input id="customBaseName" type="text" placeholder="results" />
+          </label>
+          <label class="custom-save-field">
+            <span class="label">Max rows per file</span>
+            <input id="customMaxRows" type="number" min="1" step="1" placeholder="50000" />
+          </label>
+          <div class="custom-save-field estimate">
+            <span class="label">Estimated files</span>
+            <div id="customFileEstimate" class="muted">Enter max rows to estimate.</div>
+          </div>
+        </div>
+        <div class="custom-save-actions">
+          <button id="customSaveRun" class="btn primary">Save files</button>
+          <span id="customSaveStatus" class="muted smallprint"></span>
+        </div>
       </div>
     </section>
 
@@ -85,6 +114,7 @@
     let FILTER_OPTIONS = {};
     let SELECTED = {};
     let ACTIVE_KEY = null;
+    let LAST_PREVIEW_COUNT = null;
 
     function getMeta(key){ return FILTERS_META.find(f=>f.key===key) || {key, label:key, type:"multiselect"}; }
 
@@ -379,13 +409,22 @@
 
     async function doPreview(){
       $("#previewOut").textContent="…";
-      const res=await fetch(API("/api/preview"),{
-        method:"POST",
-        headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({selected:SELECTED})
-      });
-      const data=await res.json();
-      $("#previewOut").textContent=`${data.count.toLocaleString()} rows`;
+      try{
+        const res=await fetch(API("/api/preview"),{
+          method:"POST",
+          headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({selected:SELECTED})
+        });
+        const data=await res.json();
+        const count=typeof data.count==='number'?data.count:parseInt(data.count,10)||0;
+        LAST_PREVIEW_COUNT=count;
+        $("#previewOut").textContent=`${count.toLocaleString()} rows`;
+      }catch(err){
+        console.error('Preview failed',err);
+        LAST_PREVIEW_COUNT=null;
+        $("#previewOut").textContent="Error";
+      }
+      updateCustomSaveEstimate();
     }
 
     async function doDownload(){
@@ -402,10 +441,85 @@
       URL.revokeObjectURL(url);
     }
 
+    function toggleCustomSavePanel(){
+      const panel=document.getElementById('customSavePanel');
+      if(!panel) return;
+      const hidden=panel.classList.contains('hidden');
+      panel.classList.toggle('hidden',!hidden);
+      if(hidden){
+        setCustomSaveStatus('');
+        updateCustomSaveEstimate();
+      }
+    }
+
+    function updateCustomSaveEstimate(){
+      const out=document.getElementById('customFileEstimate');
+      if(!out) return;
+      const input=document.getElementById('customMaxRows');
+      const raw=(input && input.value?input.value:'').trim();
+      if(!raw){ out.textContent='Enter max rows to estimate.'; return; }
+      const maxRows=parseInt(raw,10);
+      if(!Number.isFinite(maxRows)||maxRows<=0){ out.textContent='Max rows must be a positive number.'; return; }
+      if(typeof LAST_PREVIEW_COUNT==='number'){
+        const total=LAST_PREVIEW_COUNT;
+        if(total<=0){ out.textContent='0 files (no rows to save).'; }
+        else {
+          const files=Math.ceil(total/maxRows);
+          out.textContent=`${files} ${files===1?'file':'files'} from ${total.toLocaleString()} rows.`;
+        }
+      } else {
+        out.textContent='Run a preview to estimate file count.';
+      }
+    }
+
+    function setCustomSaveStatus(message,isError=false){
+      const el=document.getElementById('customSaveStatus');
+      if(!el) return;
+      el.textContent=message||'';
+      el.classList.toggle('status-error',!!isError);
+    }
+
+    async function doCustomSave(){
+      const dir=(document.getElementById('customSavePath')?.value||'').trim();
+      const base=(document.getElementById('customBaseName')?.value||'').trim();
+      const raw=(document.getElementById('customMaxRows')?.value||'').trim();
+      const btn=document.getElementById('customSaveRun');
+      const maxRows=parseInt(raw,10);
+      if(!dir){ setCustomSaveStatus('Provide a save directory.',true); return; }
+      if(!base){ setCustomSaveStatus('Provide a base filename.',true); return; }
+      if(!Number.isFinite(maxRows)||maxRows<=0){ setCustomSaveStatus('Max rows per file must be a positive number.',true); return; }
+      setCustomSaveStatus('Saving…');
+      if(btn) btn.disabled=true;
+      try{
+        const res=await fetch(API('/api/save'),{
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({selected:SELECTED,directory:dir,baseName:base,maxRowsPerFile:maxRows})
+        });
+        let data={};
+        try{ data=await res.json(); }catch(_){ data={}; }
+        if(!res.ok || !data.ok) throw new Error(data.error||res.statusText||'Save failed');
+        const files=Array.isArray(data.files)?data.files:[];
+        const created=typeof data.created_files==='number'?data.created_files:files.length;
+        const total=typeof data.total_rows==='number'?data.total_rows:null;
+        let msg=`Saved ${created} file${created===1?'':'s'}`;
+        if(typeof total==='number') msg+=` · ${total.toLocaleString()} rows total`;
+        setCustomSaveStatus(msg);
+      }catch(err){
+        console.error('Save failed',err);
+        setCustomSaveStatus('Save failed: '+(err && err.message?err.message:err),true);
+      }finally{
+        if(btn) btn.disabled=false;
+      }
+    }
+
     document.addEventListener("DOMContentLoaded",()=>{
       loadFilters();
       $("#previewBtn").addEventListener("click",doPreview);
       $("#downloadBtn").addEventListener("click",doDownload);
+      $("#customSaveToggle")?.addEventListener("click",(ev)=>{ ev.preventDefault(); toggleCustomSavePanel(); });
+      $("#customMaxRows")?.addEventListener("input",updateCustomSaveEstimate);
+      $("#customSaveRun")?.addEventListener("click",(ev)=>{ ev.preventDefault(); doCustomSave(); });
       $("#backBtn").addEventListener("click",()=>closePanel(false));
       $("#saveBtn").addEventListener("click",()=>closePanel(true));
 
