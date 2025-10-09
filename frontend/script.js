@@ -913,6 +913,173 @@ async function doDownload(){
   }
 }
 
+function defaultPreferenceName(){
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  return `preference_${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+}
+
+async function createPreference(){
+  const suggested = defaultPreferenceName();
+  const input = window.prompt("Enter a name for this preference (stored under bigdata/preferences):", suggested);
+  if(input === null){
+    return;
+  }
+  const name = (input.trim() || suggested).replace(/[\\/]/g, "");
+  const payload = {
+    name,
+    selected: SELECTED,
+    advanced: getAdvancedPayload(),
+  };
+  try{
+    const res = await fetch(API("/api/preferences/create"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    if(!res.ok || (data && data.ok === false)){
+      throw new Error((data && data.error) || res.statusText || "Failed to save preference");
+    }
+    const filename = data.file || name;
+    alert(`Preference saved as ${filename}.`);
+  }catch(err){
+    console.error("Failed to create preference", err);
+    alert(`Save failed: ${err && err.message ? err.message : err}`);
+  }
+}
+
+async function applyPreferencePayload(payload){
+  const incoming = payload && typeof payload.selected === "object" && payload.selected !== null ? payload.selected : {};
+  const nextSelected = {};
+  Object.keys(incoming).forEach((key) => {
+    nextSelected[key] = incoming[key];
+  });
+  SELECTED = nextSelected;
+
+  if(Array.isArray(FILTERS_META)){
+    FILTERS_META.forEach((meta) => {
+      if(SELECTED[meta.key] === undefined){
+        if(meta.type === "sbi"){
+          SELECTED[meta.key] = baseSbiSelection();
+        } else {
+          SELECTED[meta.key] = [];
+        }
+      } else if(meta.type === "sbi"){
+        SELECTED[meta.key] = normalizeSbiSelection(SELECTED[meta.key]);
+      }
+    });
+  }
+  ensureSbiState();
+
+  if(Array.isArray(SELECTED.location)){
+    const valid = new Set(FILTER_OPTIONS.location || []);
+    if(valid.size > 0){
+      SELECTED.location = SELECTED.location.filter((value) => valid.has(value));
+    }
+  }
+
+  const advanced = payload && typeof payload.advanced === "object" && payload.advanced !== null ? payload.advanced : {};
+  let handledDupPath = false;
+  if(Object.prototype.hasOwnProperty.call(advanced, "duplicatesPath")){
+    const dupVal = typeof advanced.duplicatesPath === "string" ? advanced.duplicatesPath : "";
+    setDuplicatesPath(dupVal);
+    const input = document.getElementById("duplicatesPath");
+    if(input){
+      input.value = dupVal;
+    }
+    handledDupPath = true;
+  }
+  if(!handledDupPath){
+    setDuplicatesPath("");
+    const input = document.getElementById("duplicatesPath");
+    if(input){
+      input.value = "";
+    }
+  }
+
+  if(Object.prototype.hasOwnProperty.call(advanced, "filterDuplicates")){
+    ADVANCED_STATE.filterDuplicates = Boolean(advanced.filterDuplicates);
+  } else {
+    ADVANCED_STATE.filterDuplicates = false;
+  }
+  updateFilterDubsButton();
+  if(!ADVANCED_STATE.filterDuplicates){
+    setAdvancedStatus("");
+  }
+
+  markPreviewDirty();
+  renderDashboard();
+  updateAnalysisButtonState();
+  return await doPreview();
+}
+
+async function loadPreference(){
+  try{
+    if(!Array.isArray(FILTERS_META) || FILTERS_META.length === 0){
+      await loadFilters();
+    }
+    const res = await fetch(API("/api/preferences"));
+    const data = await res.json();
+    if(!res.ok || (data && data.ok === false)){
+      throw new Error((data && data.error) || res.statusText || "Failed to list preferences");
+    }
+    const preferences = Array.isArray(data.preferences) ? data.preferences : [];
+    if(preferences.length === 0){
+      alert("No preference files found in bigdata/preferences.");
+      return;
+    }
+    const lines = preferences.map((pref, idx) => {
+      const stamp = pref.modified ? ` (${pref.modified})` : "";
+      return `${idx + 1}. ${pref.name}${stamp}`;
+    });
+    const promptText = [
+      "Enter the number or filename to load:",
+      lines.join("\n"),
+    ].filter(Boolean).join("\n");
+    const choiceRaw = window.prompt(promptText, "1");
+    if(choiceRaw === null){
+      return;
+    }
+    const choice = choiceRaw.trim();
+    if(!choice){
+      return;
+    }
+    let targetName = null;
+    const idx = Number.parseInt(choice, 10);
+    if(!Number.isNaN(idx) && idx >= 1 && idx <= preferences.length){
+      targetName = preferences[idx - 1].name;
+    } else {
+      const exact = preferences.find((pref) => pref.name === choice);
+      if(exact){
+        targetName = exact.name;
+      }
+    }
+    if(!targetName){
+      alert("No matching preference found.");
+      return;
+    }
+    const loadRes = await fetch(API("/api/preferences/load"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: targetName }),
+    });
+    const loadData = await loadRes.json();
+    if(!loadRes.ok || (loadData && loadData.ok === false)){
+      throw new Error((loadData && loadData.error) || loadRes.statusText || "Failed to load preference");
+    }
+    const success = await applyPreferencePayload(loadData);
+    if(!success){
+      alert(`Preference \u201c${targetName}\u201d loaded, but preview failed. Adjust settings if needed.`);
+    } else {
+      alert(`Preference \u201c${targetName}\u201d loaded.`);
+    }
+  }catch(err){
+    console.error("Failed to load preference", err);
+    alert(`Load failed: ${err && err.message ? err.message : err}`);
+  }
+}
+
 let CUSTOM_SAVE_COUNTER = 0;
 
 function renderAnalysisOptions(){
@@ -1769,6 +1936,14 @@ document.addEventListener("DOMContentLoaded", () => {
   loadFilters();
   $("#previewBtn")?.addEventListener("click", doPreview);
   $("#downloadBtn")?.addEventListener("click", doDownload);
+  $("#createPreferenceBtn")?.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    createPreference();
+  });
+  $("#loadPreferenceBtn")?.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    loadPreference();
+  });
   $("#analysisBtn")?.addEventListener("click", (ev) => {
     ev.preventDefault();
     openAnalysisModal();

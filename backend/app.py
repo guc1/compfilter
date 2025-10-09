@@ -1,9 +1,49 @@
+import csv
+import json
+import re
+from datetime import datetime
 from pathlib import Path
 
 from flask import Flask, send_from_directory, jsonify, request, Response
 from backend.filterscripts import combinator
 
 app = Flask(__name__, static_folder="../frontend", static_url_path="")
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+PREFERENCES_DIR = REPO_ROOT / "bigdata" / "preferences"
+
+
+def ensure_preferences_dir() -> Path:
+    """Create the preferences directory if it doesn't exist."""
+    PREFERENCES_DIR.mkdir(parents=True, exist_ok=True)
+    return PREFERENCES_DIR
+
+
+def sanitize_preference_name(raw_name: str | None) -> str:
+    """Return a safe filename for a preference export."""
+    base = (raw_name or "").strip()
+    if base:
+        base = base.replace("\\", "/").split("/")[-1]
+        base = re.sub(r"[^A-Za-z0-9._-]", "_", base)
+    if not base:
+        base = f"preference_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    if not base.lower().endswith(".csv"):
+        base = f"{base}.csv"
+    return base
+
+
+def ensure_unique_path(path: Path) -> Path:
+    """Return a unique path if the target already exists."""
+    if not path.exists():
+        return path
+    stem = path.stem
+    suffix = path.suffix
+    counter = 1
+    while True:
+        candidate = path.with_name(f"{stem}_{counter}{suffix}")
+        if not candidate.exists():
+            return candidate
+        counter += 1
 
 @app.route("/")
 def index():
@@ -221,6 +261,140 @@ def api_save():
         return jsonify({"ok": False, "error": f"Filesystem error: {exc}"}), 500
 
     return jsonify(build_response(files, total_rows, details, fallback_directory=directory_raw, fallback_max_rows=max_rows))
+
+
+@app.route("/api/preferences", methods=["GET"])
+def api_preferences_list():
+    directory = ensure_preferences_dir()
+    items = []
+    try:
+        directory_resolved = directory.resolve()
+    except OSError:
+        directory_resolved = directory
+    for path in directory.glob("*.csv"):
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        item = {
+            "name": path.name,
+            "path": str(path.resolve()),
+            "size": stat.st_size,
+        }
+        try:
+            item["modified"] = datetime.fromtimestamp(stat.st_mtime).astimezone().isoformat(timespec="seconds")
+        except Exception:
+            item["modified"] = None
+        items.append(item)
+    items.sort(key=lambda row: row.get("modified") or "", reverse=True)
+    return jsonify({"ok": True, "preferences": items, "directory": str(directory_resolved)})
+
+
+@app.route("/api/preferences/create", methods=["POST"])
+def api_preferences_create():
+    payload = request.get_json(silent=True) or {}
+    selected = payload.get("selected")
+    advanced = payload.get("advanced")
+    name_raw = payload.get("name") or payload.get("filename") or payload.get("file")
+
+    if not isinstance(selected, dict):
+        selected = {}
+    if not isinstance(advanced, dict):
+        advanced = {}
+
+    filename = sanitize_preference_name(str(name_raw) if name_raw is not None else None)
+    directory = ensure_preferences_dir()
+    target = ensure_unique_path(directory / filename)
+
+    timestamp = datetime.now().astimezone().isoformat(timespec="seconds")
+    try:
+        with target.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.writer(handle)
+            writer.writerow(["section", "key", "value"])
+            writer.writerow(["meta", "version", "1"])
+            writer.writerow(["meta", "saved_at", timestamp])
+            writer.writerow(["advanced", "payload", json.dumps(advanced, ensure_ascii=False, sort_keys=True)])
+            for key in sorted(selected.keys()):
+                writer.writerow(["selected", key, json.dumps(selected[key], ensure_ascii=False, sort_keys=True)])
+    except (OSError, TypeError, ValueError, csv.Error) as exc:
+        return jsonify({"ok": False, "error": f"Failed to write preference: {exc}"}), 500
+
+    return jsonify({
+        "ok": True,
+        "file": target.name,
+        "path": str(target.resolve()),
+        "saved_at": timestamp,
+    })
+
+
+@app.route("/api/preferences/load", methods=["POST"])
+def api_preferences_load():
+    payload = request.get_json(silent=True) or {}
+    name_raw = payload.get("name") or payload.get("filename") or payload.get("file")
+    if not name_raw:
+        return jsonify({"ok": False, "error": "Preference name is required"}), 400
+
+    filename = sanitize_preference_name(str(name_raw))
+    directory = ensure_preferences_dir()
+    target = directory / filename
+    if not target.exists():
+        return jsonify({"ok": False, "error": "Preference not found"}), 404
+
+    selected = {}
+    advanced_payload = {}
+    metadata = {}
+
+    try:
+        with target.open("r", encoding="utf-8", newline="") as handle:
+            reader = csv.reader(handle)
+            _header = next(reader, None)
+            for row in reader:
+                if len(row) < 3:
+                    continue
+                section = (row[0] or "").strip().lower()
+                key = row[1]
+                raw_value = row[2]
+                if section == "selected":
+                    try:
+                        selected[key] = json.loads(raw_value)
+                    except json.JSONDecodeError:
+                        selected[key] = raw_value
+                elif section == "advanced":
+                    if key == "payload":
+                        try:
+                            parsed = json.loads(raw_value)
+                        except json.JSONDecodeError:
+                            parsed = {}
+                        if isinstance(parsed, dict):
+                            advanced_payload.update(parsed)
+                        else:
+                            advanced_payload[key] = parsed
+                    else:
+                        try:
+                            advanced_payload[key] = json.loads(raw_value)
+                        except json.JSONDecodeError:
+                            advanced_payload[key] = raw_value
+                elif section == "meta":
+                    metadata[key] = raw_value
+    except FileNotFoundError:
+        return jsonify({"ok": False, "error": "Preference not found"}), 404
+    except csv.Error as exc:
+        return jsonify({"ok": False, "error": f"Failed to parse preference: {exc}"}), 400
+    except OSError as exc:
+        return jsonify({"ok": False, "error": f"Filesystem error: {exc}"}), 500
+
+    response = {
+        "ok": True,
+        "file": target.name,
+        "path": str(target.resolve()),
+        "selected": selected,
+        "advanced": advanced_payload,
+        "meta": metadata,
+    }
+    if "saved_at" in metadata:
+        response["saved_at"] = metadata["saved_at"]
+    return jsonify(response)
+
 
 @app.route("/api/location/upload", methods=["POST"])
 def api_location_upload():
