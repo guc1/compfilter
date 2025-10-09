@@ -2,7 +2,7 @@
 import csv
 import re
 from pathlib import Path
-from typing import Dict, List, Generator, Iterable, Tuple, Optional, Set
+from typing import Dict, List, Generator, Iterable, Tuple, Optional, Set, Any
 
 from ..config import CSV_PATH, CSV_DELIMITER, CSV_ENCODING
 
@@ -267,6 +267,168 @@ def _sanitize_basename(base_name: str) -> str:
     return stem or "results"
 
 
+def save_filtered_csv_multi(
+    selected_filters: Dict[str, List[str]],
+    destinations: List[Dict[str, Any]],
+    advanced: Optional[Dict[str, object]] = None,
+) -> Tuple[List[Path], int, List[Dict[str, Any]]]:
+    """Save filtered results into multiple destinations.
+
+    Each destination dict must contain:
+        directory: str or Path
+        base_name: str
+        max_rows_per_file: int
+        rows_requested: Optional[int] (None => rest)
+    """
+
+    if not destinations:
+        raise ValueError("At least one save destination is required")
+
+    header, rows = _stream_rows(CSV_PATH)
+    filtered = _apply_filters(rows, header, selected_filters, advanced)
+
+    prepared: List[Dict[str, Any]] = []
+    rest_index: Optional[int] = None
+
+    for idx, raw in enumerate(destinations):
+        directory_raw = raw.get("directory")
+        base_name_raw = raw.get("base_name") or raw.get("baseName") or ""
+        max_rows_raw = raw.get("max_rows_per_file") or raw.get("maxRowsPerFile")
+        rows_raw = raw.get("rows_requested") or raw.get("rowsRequested")
+
+        if isinstance(rows_raw, str) and rows_raw.strip().upper() == "R":
+            rows_raw = None
+
+        if directory_raw is None or str(directory_raw).strip() == "":
+            raise ValueError(f"Destination {idx + 1}: directory is required")
+        if max_rows_raw is None:
+            raise ValueError(f"Destination {idx + 1}: max_rows_per_file is required")
+
+        try:
+            max_rows = int(max_rows_raw)
+        except (TypeError, ValueError):
+            raise ValueError(f"Destination {idx + 1}: max_rows_per_file must be an integer")
+        if max_rows <= 0:
+            raise ValueError(f"Destination {idx + 1}: max_rows_per_file must be greater than zero")
+
+        try:
+            directory_path = Path(directory_raw).expanduser().resolve()
+        except Exception as exc:
+            raise ValueError(f"Destination {idx + 1}: invalid directory: {exc}")
+        directory_path.mkdir(parents=True, exist_ok=True)
+
+        safe_base = _sanitize_basename(str(base_name_raw))
+
+        is_rest = rows_raw is None
+        if is_rest:
+            if rest_index is not None:
+                raise ValueError("Only one destination can use R (rest).")
+            requested_rows: Optional[int] = None
+        else:
+            try:
+                requested_rows = int(rows_raw)
+            except (TypeError, ValueError):
+                raise ValueError(f"Destination {idx + 1}: rows must be a positive integer or 'R'")
+            if requested_rows <= 0:
+                raise ValueError(f"Destination {idx + 1}: rows must be greater than zero")
+
+        entry = {
+            "directory": directory_path,
+            "safe_base": safe_base,
+            "max_rows": max_rows,
+            "requested": requested_rows,
+            "remaining": requested_rows,
+            "file_index": 0,
+            "handle": None,
+            "writer": None,
+            "current_count": 0,
+            "files": [],
+            "total_rows": 0,
+        }
+        if is_rest:
+            rest_index = len(prepared)
+        prepared.append(entry)
+
+    def ensure_writer(entry: Dict[str, Any]):
+        if entry["writer"] is None or entry["current_count"] >= entry["max_rows"]:
+            if entry["handle"]:
+                entry["handle"].close()
+            entry["file_index"] += 1
+            fname = f"{entry['safe_base']}{entry['file_index']}.csv"
+            path = entry["directory"] / fname
+            handle = path.open("w", encoding=CSV_ENCODING, newline="")
+            handle.write("\ufeff")
+            writer = csv.writer(
+                handle,
+                delimiter=CSV_DELIMITER,
+                quotechar='"',
+                lineterminator="\r\n",
+                quoting=csv.QUOTE_MINIMAL,
+                doublequote=True,
+                escapechar=None,
+            )
+            writer.writerow(header)
+            entry["files"].append(path)
+            entry["handle"] = handle
+            entry["writer"] = writer
+            entry["current_count"] = 0
+
+    total_rows_written = 0
+
+    try:
+        for row in filtered:
+            destination_index: Optional[int] = None
+            for idx, entry in enumerate(prepared):
+                remaining = entry.get("remaining")
+                if remaining is not None and remaining > 0:
+                    destination_index = idx
+                    break
+            if destination_index is None:
+                destination_index = rest_index
+            if destination_index is None:
+                raise ValueError(
+                    "More rows produced than allocated. Increase the fixed amounts or add an R destination."
+                )
+
+            entry = prepared[destination_index]
+            ensure_writer(entry)
+            entry["writer"].writerow(row)
+            entry["current_count"] += 1
+            entry["total_rows"] += 1
+            total_rows_written += 1
+            if entry["remaining"] is not None:
+                entry["remaining"] -= 1
+
+        if total_rows_written == 0 and prepared:
+            first = prepared[0]
+            if not first["files"]:
+                ensure_writer(first)
+
+    finally:
+        for entry in prepared:
+            if entry["handle"]:
+                entry["handle"].close()
+                entry["handle"] = None
+                entry["writer"] = None
+                entry["current_count"] = 0
+
+    all_files: List[Path] = []
+    details: List[Dict[str, Any]] = []
+    for entry in prepared:
+        all_files.extend(entry["files"])
+        details.append({
+            "directory": str(entry["directory"]),
+            "base_name": entry["safe_base"],
+            "max_rows_per_file": entry["max_rows"],
+            "requested_rows": entry["requested"],
+            "mode": "rest" if entry["requested"] is None else "fixed",
+            "rows_written": entry["total_rows"],
+            "files": [str(p) for p in entry["files"]],
+        })
+
+    return all_files, total_rows_written, details
+
+
 def save_filtered_csv(
     selected_filters: Dict[str, List[str]],
     directory: Path,
@@ -274,72 +436,18 @@ def save_filtered_csv(
     max_rows_per_file: int,
     advanced: Optional[Dict[str, object]] = None,
 ) -> Tuple[List[Path], int]:
-    """Save filtered results into chunked CSV files.
+    """Backward-compatible single destination save."""
 
-    Returns (list_of_files, total_rows_written).
-    """
-    if max_rows_per_file <= 0:
-        raise ValueError("max_rows_per_file must be greater than zero")
-
-    safe_base = _sanitize_basename(base_name)
-    target_dir = directory.expanduser().resolve()
-    target_dir.mkdir(parents=True, exist_ok=True)
-
-    header, rows = _stream_rows(CSV_PATH)
-    filtered = _apply_filters(rows, header, selected_filters, advanced)
-
-    created_files: List[Path] = []
-    total_rows = 0
-    file_index = 0
-    current_writer = None
-    current_handle = None
-    current_count = 0
-
-    def start_new_file(idx: int):
-        fname = f"{safe_base}{idx}.csv"
-        path = target_dir / fname
-        handle = path.open("w", encoding=CSV_ENCODING, newline="")
-        handle.write("\ufeff")
-        writer = csv.writer(
-            handle,
-            delimiter=CSV_DELIMITER,
-            quotechar='"',
-            lineterminator="\r\n",
-            quoting=csv.QUOTE_MINIMAL,
-            doublequote=True,
-            escapechar=None,
-        )
-        writer.writerow(header)
-        return path, handle, writer
-
-    try:
-        for row in filtered:
-            if current_writer is None or current_count >= max_rows_per_file:
-                if current_handle:
-                    current_handle.close()
-                file_index += 1
-                path, handle, writer = start_new_file(file_index)
-                created_files.append(path)
-                current_handle = handle
-                current_writer = writer
-                current_count = 0
-
-            current_writer.writerow(row)
-            total_rows += 1
-            current_count += 1
-
-        # If no rows were written we still create an empty file with just the header
-        if total_rows == 0:
-            if current_handle:
-                current_handle.close()
-            file_index = 1
-            path, handle, writer = start_new_file(file_index)
-            created_files.append(path)
-            current_handle = handle
-            current_writer = writer
-
-    finally:
-        if current_handle:
-            current_handle.close()
-
-    return created_files, total_rows
+    files, total_rows, _ = save_filtered_csv_multi(
+        selected_filters,
+        [
+            {
+                "directory": directory,
+                "base_name": base_name,
+                "max_rows_per_file": max_rows_per_file,
+                "rows_requested": None,
+            }
+        ],
+        advanced,
+    )
+    return files, total_rows

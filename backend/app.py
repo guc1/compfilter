@@ -74,7 +74,104 @@ def api_save():
     directory_raw = str(payload.get("directory") or "").strip()
     base_name = str(payload.get("baseName") or payload.get("basename") or "").strip()
     max_rows_raw = payload.get("maxRowsPerFile") or payload.get("max_rows_per_file")
+    destinations_payload = payload.get("destinations")
 
+    def build_response(files, total_rows, details, fallback_directory=None, fallback_max_rows=None):
+        response = {
+            "ok": True,
+            "files": [str(p) for p in files],
+            "created_files": len(files),
+            "total_rows": total_rows,
+        }
+        if details:
+            response["destinations"] = details
+            response["directory"] = details[0]["directory"]
+            response["max_rows_per_file"] = details[0]["max_rows_per_file"]
+        else:
+            if fallback_directory:
+                response["directory"] = str(Path(fallback_directory).expanduser().resolve())
+            if fallback_max_rows is not None:
+                response["max_rows_per_file"] = fallback_max_rows
+        return response
+
+    if isinstance(destinations_payload, list) and len(destinations_payload) > 0:
+        parsed_dests = []
+        rest_seen = False
+        for idx, entry in enumerate(destinations_payload):
+            directory_val = entry.get("directory")
+            if directory_val is None or str(directory_val).strip() == "":
+                directory_val = directory_raw
+            base_val = entry.get("baseName") or entry.get("basename")
+            if base_val is None or str(base_val).strip() == "":
+                base_val = base_name
+            max_rows_val = entry.get("maxRowsPerFile") or entry.get("max_rows_per_file")
+            if max_rows_val is None:
+                max_rows_val = max_rows_raw
+
+            rows_val = entry.get("rows")
+            if rows_val is None:
+                rows_val = entry.get("rows_requested") or entry.get("rowsRequested")
+            mode_val = str(entry.get("mode") or "").strip().lower()
+
+            directory_val = str(directory_val or "").strip()
+            if not directory_val:
+                return jsonify({"ok": False, "error": f"Destination {idx + 1}: directory is required"}), 400
+
+            base_val = str(base_val or "").strip()
+
+            if max_rows_val is None:
+                return jsonify({"ok": False, "error": f"Destination {idx + 1}: max rows per file is required"}), 400
+            try:
+                max_rows = int(max_rows_val)
+            except (TypeError, ValueError):
+                return jsonify({"ok": False, "error": f"Destination {idx + 1}: max rows per file must be an integer"}), 400
+            if max_rows <= 0:
+                return jsonify({"ok": False, "error": f"Destination {idx + 1}: max rows per file must be greater than zero"}), 400
+
+            if isinstance(rows_val, str) and rows_val.strip().upper() == "R":
+                rows_val = None
+                mode_val = "rest"
+
+            is_rest = False
+            if mode_val == "rest":
+                is_rest = True
+            elif mode_val == "fixed":
+                is_rest = False
+            elif rows_val is None:
+                is_rest = True
+
+            if is_rest:
+                if rest_seen:
+                    return jsonify({"ok": False, "error": "Only one destination can use R (rest)."}), 400
+                rest_seen = True
+                requested_rows = None
+            else:
+                try:
+                    requested_rows = int(rows_val)
+                except (TypeError, ValueError):
+                    return jsonify({"ok": False, "error": f"Destination {idx + 1}: amount saved must be a positive integer or R"}), 400
+                if requested_rows <= 0:
+                    return jsonify({"ok": False, "error": f"Destination {idx + 1}: amount saved must be greater than zero"}), 400
+
+            parsed_dests.append({
+                "directory": directory_val,
+                "base_name": base_val,
+                "max_rows_per_file": max_rows,
+                "rows_requested": requested_rows,
+            })
+
+        try:
+            files, total_rows, details = combinator.save_filtered_csv_multi(sel, parsed_dests, advanced)
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        except PermissionError as exc:
+            return jsonify({"ok": False, "error": f"Permission denied: {exc}"}), 403
+        except OSError as exc:
+            return jsonify({"ok": False, "error": f"Filesystem error: {exc}"}), 500
+
+        return jsonify(build_response(files, total_rows, details))
+
+    # Fallback to legacy single-destination payload
     if not directory_raw:
         return jsonify({"ok": False, "error": "Target directory is required"}), 400
     if not base_name:
@@ -84,9 +181,15 @@ def api_save():
     except (TypeError, ValueError):
         return jsonify({"ok": False, "error": "Max rows per file must be an integer"}), 400
 
+    single_dest = [{
+        "directory": directory_raw,
+        "base_name": base_name,
+        "max_rows_per_file": max_rows,
+        "rows_requested": None,
+    }]
+
     try:
-        target_dir = Path(directory_raw)
-        files, total_rows = combinator.save_filtered_csv(sel, target_dir, base_name, max_rows, advanced)
+        files, total_rows, details = combinator.save_filtered_csv_multi(sel, single_dest, advanced)
     except ValueError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
     except PermissionError as exc:
@@ -94,14 +197,7 @@ def api_save():
     except OSError as exc:
         return jsonify({"ok": False, "error": f"Filesystem error: {exc}"}), 500
 
-    return jsonify({
-        "ok": True,
-        "directory": str(Path(directory_raw).expanduser().resolve()),
-        "files": [str(p) for p in files],
-        "created_files": len(files),
-        "total_rows": total_rows,
-        "max_rows_per_file": max_rows,
-    })
+    return jsonify(build_response(files, total_rows, details, fallback_directory=directory_raw, fallback_max_rows=max_rows))
 
 @app.route("/api/location/upload", methods=["POST"])
 def api_location_upload():
