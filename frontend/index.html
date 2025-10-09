@@ -63,23 +63,13 @@
       </div>
 
       <div id="customSavePanel" class="custom-save hidden">
-        <div class="custom-save-grid">
-          <label class="custom-save-field">
-            <span class="label">Save directory</span>
-            <input id="customSavePath" type="text" placeholder="/path/to/folder" />
-          </label>
-          <label class="custom-save-field">
-            <span class="label">Base filename</span>
-            <input id="customBaseName" type="text" placeholder="results" />
-          </label>
-          <label class="custom-save-field">
-            <span class="label">Max rows per file</span>
-            <input id="customMaxRows" type="number" min="1" step="1" placeholder="50000" />
-          </label>
-          <div class="custom-save-field estimate">
-            <span class="label">Estimated files</span>
-            <div id="customFileEstimate" class="muted">Enter max rows to estimate.</div>
-          </div>
+        <div id="customSaveDestinations" class="custom-save-destinations"></div>
+        <div class="custom-save-add">
+          <button id="customSaveAdd" class="btn ghost" type="button">Add extra saving</button>
+        </div>
+        <div class="custom-save-field estimate">
+          <span class="label">Estimated files</span>
+          <div id="customFileEstimate" class="muted">Enter details to estimate.</div>
         </div>
         <div class="custom-save-actions">
           <button id="customSaveRun" class="btn primary">Save files</button>

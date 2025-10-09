@@ -813,11 +813,178 @@ async function doDownload(){
   }
 }
 
+let CUSTOM_SAVE_COUNTER = 0;
+
+function createCustomSaveDestinationElement(initial = {}){
+  CUSTOM_SAVE_COUNTER += 1;
+  const dest = document.createElement('div');
+  dest.className = 'custom-save-destination';
+  dest.dataset.destId = String(CUSTOM_SAVE_COUNTER);
+  dest.innerHTML = `
+    <div class="custom-save-grid">
+      <label class="custom-save-field">
+        <span class="label">Save directory</span>
+        <input type="text" class="custom-save-dir" placeholder="/path/to/folder" />
+      </label>
+      <label class="custom-save-field">
+        <span class="label">Base filename</span>
+        <input type="text" class="custom-save-base" placeholder="results" />
+      </label>
+      <label class="custom-save-field">
+        <span class="label">Max rows per file</span>
+        <input type="number" min="1" step="1" class="custom-save-max" placeholder="50000" />
+      </label>
+      <label class="custom-save-field">
+        <span class="label">Amount saved here</span>
+        <input type="text" class="custom-save-amount" placeholder="e.g. 150000 or R" />
+      </label>
+    </div>
+    <div class="custom-save-destination-actions">
+      <button type="button" class="btn ghost custom-save-remove">Remove</button>
+    </div>
+  `;
+
+  const dirInput = dest.querySelector('.custom-save-dir');
+  if(dirInput && initial.directory){ dirInput.value = initial.directory; }
+  const baseInput = dest.querySelector('.custom-save-base');
+  if(baseInput && initial.baseName){ baseInput.value = initial.baseName; }
+  const maxInput = dest.querySelector('.custom-save-max');
+  if(maxInput && initial.maxRows){ maxInput.value = initial.maxRows; }
+  const amountInput = dest.querySelector('.custom-save-amount');
+  if(amountInput && initial.amount){ amountInput.value = initial.amount; }
+
+  return dest;
+}
+
+function ensureCustomSaveDefault(){
+  const container = document.getElementById('customSaveDestinations');
+  if(!container) return;
+  if(container.querySelector('.custom-save-destination')) return;
+  container.appendChild(createCustomSaveDestinationElement());
+  refreshCustomSaveRemovers();
+}
+
+function refreshCustomSaveRemovers(){
+  const container = document.getElementById('customSaveDestinations');
+  if(!container) return;
+  const nodes = Array.from(container.querySelectorAll('.custom-save-destination'));
+  nodes.forEach((node, idx) => {
+    const removeBtn = node.querySelector('.custom-save-remove');
+    if(removeBtn){
+      const disable = nodes.length <= 1;
+      removeBtn.classList.toggle('hidden', disable);
+      removeBtn.disabled = disable;
+    }
+  });
+}
+
+function addCustomSaveDestination(copyDirectory = true){
+  const container = document.getElementById('customSaveDestinations');
+  if(!container) return;
+  ensureCustomSaveDefault();
+  const firstDirInput = container.querySelector('.custom-save-destination:first-child .custom-save-dir');
+  const initial = {};
+  if(copyDirectory && firstDirInput && firstDirInput.value){
+    initial.directory = firstDirInput.value;
+  }
+  const dest = createCustomSaveDestinationElement(initial);
+  container.appendChild(dest);
+  refreshCustomSaveRemovers();
+  updateCustomSaveEstimate();
+  setCustomSaveStatus('');
+  const focusTarget = dest.querySelector('.custom-save-base');
+  if(focusTarget){ focusTarget.focus(); }
+}
+
+function parseCustomSaveDestinations(options = {}){
+  const requireFull = Boolean(options.requireFull);
+  const container = document.getElementById('customSaveDestinations');
+  const nodes = Array.from(container ? container.querySelectorAll('.custom-save-destination') : []);
+  const destinations = [];
+  const errors = [];
+  let restCount = 0;
+  let hasMissingMax = false;
+  let hasMissingAmount = false;
+
+  nodes.forEach((node, idx) => {
+    const indexLabel = `Destination ${idx + 1}`;
+    const dirInput = node.querySelector('.custom-save-dir');
+    const baseInput = node.querySelector('.custom-save-base');
+    const maxInput = node.querySelector('.custom-save-max');
+    const amountInput = node.querySelector('.custom-save-amount');
+
+    const directory = dirInput && dirInput.value ? dirInput.value.trim() : '';
+    const baseName = baseInput && baseInput.value ? baseInput.value.trim() : '';
+    const maxRowsRaw = maxInput && maxInput.value ? maxInput.value.trim() : '';
+    const amountRaw = amountInput && amountInput.value ? amountInput.value.trim() : '';
+
+    if(requireFull && !directory){
+      errors.push(`${indexLabel}: Provide a save directory.`);
+    }
+    if(requireFull && !baseName){
+      errors.push(`${indexLabel}: Provide a base filename.`);
+    }
+
+    let maxRows = null;
+    if(maxRowsRaw){
+      const parsedMax = Number.parseInt(maxRowsRaw, 10);
+      if(Number.isFinite(parsedMax) && parsedMax > 0){
+        maxRows = parsedMax;
+      } else {
+        errors.push(`${indexLabel}: Max rows per file must be a positive number.`);
+      }
+    } else if(requireFull){
+      errors.push(`${indexLabel}: Max rows per file is required.`);
+    } else {
+      hasMissingMax = true;
+    }
+
+    let rowsRequested = null;
+    let isRest = false;
+    if(amountRaw){
+      if(amountRaw.toUpperCase() === 'R'){
+        isRest = true;
+        restCount += 1;
+      } else {
+        const parsedAmount = Number.parseInt(amountRaw, 10);
+        if(Number.isFinite(parsedAmount) && parsedAmount > 0){
+          rowsRequested = parsedAmount;
+        } else {
+          errors.push(`${indexLabel}: Amount saved here must be a positive number or R.`);
+        }
+      }
+    } else if(requireFull){
+      errors.push(`${indexLabel}: Enter amount saved here or use R for the remainder.`);
+    } else {
+      hasMissingAmount = true;
+    }
+
+    destinations.push({
+      directory,
+      baseName,
+      maxRows,
+      rowsRequested,
+      isRest,
+      amountProvided: Boolean(amountRaw),
+    });
+  });
+
+  if(restCount > 1){
+    errors.push('Only one destination can use R (rest).');
+  }
+
+  const totalRequested = destinations.reduce((sum, dest) => sum + (dest.rowsRequested || 0), 0);
+
+  return { destinations, errors, restCount, hasMissingMax, hasMissingAmount, totalRequested };
+}
+
 function setCustomSaveVisible(show){
   const panel = document.getElementById('customSavePanel');
   if(!panel) return;
   panel.classList.toggle('hidden', !show);
   if(show){
+    ensureCustomSaveDefault();
+    refreshCustomSaveRemovers();
     setCustomSaveStatus('');
     updateCustomSaveEstimate();
   }
@@ -833,29 +1000,62 @@ function toggleCustomSavePanel(){
 function updateCustomSaveEstimate(){
   const out = document.getElementById('customFileEstimate');
   if(!out) return;
-  const maxRowsInput = document.getElementById('customMaxRows');
-  const raw = (maxRowsInput && maxRowsInput.value ? maxRowsInput.value : '').trim();
-  if(!raw){
-    out.textContent = 'Enter max rows to estimate.';
+  ensureCustomSaveDefault();
+  const parsed = parseCustomSaveDestinations();
+  if(parsed.errors.length){
+    out.textContent = parsed.errors[0];
     return;
   }
-  const maxRows = Number.parseInt(raw, 10);
-  if(!Number.isFinite(maxRows) || maxRows <= 0){
-    out.textContent = 'Max rows must be a positive number.';
+  if(parsed.destinations.length === 0){
+    out.textContent = 'Add at least one save destination.';
     return;
   }
-  if(typeof LAST_PREVIEW_COUNT === 'number'){
-    const total = LAST_PREVIEW_COUNT;
-    if(total <= 0){
-      out.textContent = '0 files (no rows to save).';
-    } else {
-      const files = Math.ceil(total / maxRows);
-      const word = files === 1 ? 'file' : 'files';
-      out.textContent = `${files} ${word} from ${total.toLocaleString()} rows.`;
-    }
-  } else {
-    out.textContent = 'Run a preview to estimate file count.';
+  if(parsed.hasMissingMax){
+    out.textContent = 'Enter max rows per file for each destination to estimate.';
+    return;
   }
+  if(parsed.hasMissingAmount){
+    out.textContent = 'Enter amount saved here (or R) for each destination to estimate.';
+    return;
+  }
+  if(typeof LAST_PREVIEW_COUNT !== 'number'){
+    out.textContent = 'Run a preview to estimate file counts.';
+    return;
+  }
+
+  const totalRows = LAST_PREVIEW_COUNT;
+  let remaining = totalRows;
+  const entries = parsed.destinations.map(dest => ({ dest, rows: 0 }));
+  const fixedIndices = entries.map((entry, idx) => entry.dest.isRest ? null : idx).filter(idx => idx !== null);
+  fixedIndices.forEach(idx => {
+    const entry = entries[idx];
+    const allowed = entry.dest.rowsRequested || 0;
+    const take = Math.min(allowed, Math.max(remaining, 0));
+    entry.rows = take;
+    remaining = Math.max(remaining - take, 0);
+  });
+  const restIndices = entries.map((entry, idx) => entry.dest.isRest ? idx : null).filter(idx => idx !== null);
+  restIndices.forEach(idx => {
+    const entry = entries[idx];
+    entry.rows = Math.max(remaining, 0);
+    remaining = 0;
+  });
+
+  const lines = [`Preview rows: ${totalRows.toLocaleString()}`];
+  entries.forEach((entry, idx) => {
+    const { dest, rows } = entry;
+    const labelBase = dest.baseName || `results${idx + 1}`;
+    const label = dest.isRest ? `${labelBase} (rest)` : labelBase;
+    const perFile = dest.maxRows && dest.maxRows > 0 ? dest.maxRows : 1;
+    const files = rows > 0 ? Math.ceil(rows / perFile) : 0;
+    const fileText = `${files} file${files === 1 ? '' : 's'}`;
+    const rowText = `${rows.toLocaleString()} row${rows === 1 ? '' : 's'}`;
+    lines.push(`${label}: ${fileText} · ${rowText}`);
+  });
+  if(remaining > 0){
+    lines.push(`Not allocated: ${remaining.toLocaleString()} row${remaining === 1 ? '' : 's'}. Add a rest destination or increase the amounts.`);
+  }
+  out.textContent = lines.join('\n');
 }
 
 function setCustomSaveStatus(message, isError = false){
@@ -866,28 +1066,41 @@ function setCustomSaveStatus(message, isError = false){
 }
 
 async function doCustomSave(){
-  const pathInput = document.getElementById('customSavePath');
-  const baseInput = document.getElementById('customBaseName');
-  const maxRowsInput = document.getElementById('customMaxRows');
   const runBtn = document.getElementById('customSaveRun');
+  ensureCustomSaveDefault();
+  const parsed = parseCustomSaveDestinations({ requireFull: true });
+  if(parsed.errors.length){
+    setCustomSaveStatus(parsed.errors[0], true);
+    return;
+  }
+  if(parsed.destinations.length === 0){
+    setCustomSaveStatus('Add at least one save destination.', true);
+    return;
+  }
 
-  const directory = pathInput ? pathInput.value.trim() : '';
-  const baseName = baseInput ? baseInput.value.trim() : '';
-  const maxRowsRaw = maxRowsInput ? maxRowsInput.value.trim() : '';
-  const maxRows = Number.parseInt(maxRowsRaw, 10);
+  const previewTotal = typeof LAST_PREVIEW_COUNT === 'number' ? LAST_PREVIEW_COUNT : null;
+  if(previewTotal !== null && parsed.restCount === 0 && parsed.totalRequested < previewTotal){
+    setCustomSaveStatus(`Allocated rows (${parsed.totalRequested.toLocaleString()}) are less than the preview count (${previewTotal.toLocaleString()}). Increase the amounts or add an R destination.`, true);
+    return;
+  }
 
-  if(!directory){
-    setCustomSaveStatus('Provide a save directory.', true);
-    return;
-  }
-  if(!baseName){
-    setCustomSaveStatus('Provide a base filename.', true);
-    return;
-  }
-  if(!Number.isFinite(maxRows) || maxRows <= 0){
-    setCustomSaveStatus('Max rows per file must be a positive number.', true);
-    return;
-  }
+  const destinationsPayload = parsed.destinations.map(dest => ({
+    directory: dest.directory,
+    baseName: dest.baseName,
+    maxRowsPerFile: dest.maxRows,
+    mode: dest.isRest ? 'rest' : 'fixed',
+    rows: dest.isRest ? null : dest.rowsRequested,
+  }));
+
+  const first = destinationsPayload[0] || null;
+  const payload = {
+    selected: SELECTED,
+    advanced: getAdvancedPayload(),
+    destinations: destinationsPayload,
+  };
+  if(first && first.directory){ payload.directory = first.directory; }
+  if(first && first.baseName){ payload.baseName = first.baseName; }
+  if(first && typeof first.maxRowsPerFile === 'number'){ payload.maxRowsPerFile = first.maxRowsPerFile; }
 
   setCustomSaveStatus('Saving…');
   if(runBtn) runBtn.disabled = true;
@@ -896,13 +1109,7 @@ async function doCustomSave(){
     const res = await fetch(API('/api/save'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        selected: SELECTED,
-        directory,
-        baseName,
-        maxRowsPerFile: maxRows,
-        advanced: getAdvancedPayload(),
-      })
+      body: JSON.stringify(payload)
     });
     let data = {};
     try{ data = await res.json(); } catch(_){ data = {}; }
@@ -912,10 +1119,24 @@ async function doCustomSave(){
     const files = Array.isArray(data.files) ? data.files : [];
     const created = typeof data.created_files === 'number' ? data.created_files : files.length;
     const totalRows = typeof data.total_rows === 'number' ? data.total_rows : null;
+    const destDetails = Array.isArray(data.destinations) ? data.destinations : [];
     const parts = [];
     parts.push(`Saved ${created} file${created === 1 ? '' : 's'}`);
     if(typeof totalRows === 'number'){
       parts.push(`${totalRows.toLocaleString()} rows total`);
+    }
+    if(destDetails.length > 1){
+      const per = destDetails.map(d => {
+        const label = d.base_name || d.baseName || 'results';
+        const rows = typeof d.rows_written === 'number' ? d.rows_written : (typeof d.rows === 'number' ? d.rows : null);
+        if(typeof rows === 'number'){
+          return `${label}: ${rows.toLocaleString()} rows`;
+        }
+        return label;
+      });
+      if(per.length){
+        parts.push(per.join(' · '));
+      }
     }
     setCustomSaveStatus(parts.join(' · '));
     if(ADVANCED_STATE.filterDuplicates){
@@ -1031,15 +1252,44 @@ document.addEventListener("DOMContentLoaded", () => {
     ev.preventDefault();
     toggleCustomSavePanel();
   });
-  $("#customMaxRows")?.addEventListener("input", updateCustomSaveEstimate);
   $("#customSaveRun")?.addEventListener("click", (ev) => {
     ev.preventDefault();
     doCustomSave();
   });
+  $("#customSaveAdd")?.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    addCustomSaveDestination(true);
+  });
+  const customContainer = document.getElementById('customSaveDestinations');
+  if(customContainer){
+    customContainer.addEventListener('input', () => {
+      const statusEl = document.getElementById('customSaveStatus');
+      if(statusEl && statusEl.classList.contains('status-error')){
+        setCustomSaveStatus('');
+      }
+      updateCustomSaveEstimate();
+    });
+    customContainer.addEventListener('click', (ev) => {
+      const removeBtn = ev.target.closest('.custom-save-remove');
+      if(removeBtn){
+        ev.preventDefault();
+        const parent = removeBtn.closest('.custom-save-destination');
+        if(parent){
+          parent.remove();
+          refreshCustomSaveRemovers();
+          updateCustomSaveEstimate();
+        }
+      }
+    });
+  }
   $("#backBtn")?.addEventListener("click", () => closePanel(false));
   $("#saveBtn")?.addEventListener("click", () => closePanel(true));
   $("#aoiUploadBtn")?.addEventListener("click", handleLocationUpload);
   updateAoiUploaderVisibility(null);
+
+  ensureCustomSaveDefault();
+  refreshCustomSaveRemovers();
+  updateCustomSaveEstimate();
 
   const duplicatesInput = document.getElementById("duplicatesPath");
   if(duplicatesInput){
