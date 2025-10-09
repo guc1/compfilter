@@ -9,6 +9,7 @@ let SBI_FILES = { main: [], sub: [], all: [] };
 let LAST_PREVIEW_COUNT = null;
 let PREVIEW_DIRTY = true;
 let ANALYSIS_SELECTION = new Set(["summary"]);
+let PREFERENCE_FILE_INPUT = null;
 
 const ADVANCED_STATE = {
   duplicatesPath: "",
@@ -913,6 +914,265 @@ async function doDownload(){
   }
 }
 
+function defaultPreferenceName(){
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  return `preference_${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+}
+
+async function createPreference(){
+  const suggested = defaultPreferenceName();
+  const input = window.prompt("Enter a name for this preference (stored under bigdata/preferences):", suggested);
+  if(input === null){
+    return;
+  }
+  const name = (input.trim() || suggested).replace(/[\\/]/g, "");
+  const payload = {
+    name,
+    selected: SELECTED,
+    advanced: getAdvancedPayload(),
+  };
+  try{
+    const res = await fetch(API("/api/preferences/create"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    if(!res.ok || (data && data.ok === false)){
+      throw new Error((data && data.error) || res.statusText || "Failed to save preference");
+    }
+    const filename = data.file || name;
+    alert(`Preference saved as ${filename}.`);
+  }catch(err){
+    console.error("Failed to create preference", err);
+    alert(`Save failed: ${err && err.message ? err.message : err}`);
+  }
+}
+
+async function applyPreferencePayload(payload){
+  const incoming = payload && typeof payload.selected === "object" && payload.selected !== null ? payload.selected : {};
+  const nextSelected = {};
+  Object.keys(incoming).forEach((key) => {
+    nextSelected[key] = incoming[key];
+  });
+  SELECTED = nextSelected;
+
+  if(Array.isArray(FILTERS_META)){
+    FILTERS_META.forEach((meta) => {
+      if(SELECTED[meta.key] === undefined){
+        if(meta.type === "sbi"){
+          SELECTED[meta.key] = baseSbiSelection();
+        } else {
+          SELECTED[meta.key] = [];
+        }
+      } else if(meta.type === "sbi"){
+        SELECTED[meta.key] = normalizeSbiSelection(SELECTED[meta.key]);
+      }
+    });
+  }
+  ensureSbiState();
+
+  if(Array.isArray(SELECTED.location)){
+    const valid = new Set(FILTER_OPTIONS.location || []);
+    if(valid.size > 0){
+      SELECTED.location = SELECTED.location.filter((value) => valid.has(value));
+    }
+  }
+
+  const advanced = payload && typeof payload.advanced === "object" && payload.advanced !== null ? payload.advanced : {};
+  let handledDupPath = false;
+  if(Object.prototype.hasOwnProperty.call(advanced, "duplicatesPath")){
+    const dupVal = typeof advanced.duplicatesPath === "string" ? advanced.duplicatesPath : "";
+    setDuplicatesPath(dupVal);
+    const input = document.getElementById("duplicatesPath");
+    if(input){
+      input.value = dupVal;
+    }
+    handledDupPath = true;
+  }
+  if(!handledDupPath){
+    setDuplicatesPath("");
+    const input = document.getElementById("duplicatesPath");
+    if(input){
+      input.value = "";
+    }
+  }
+
+  if(Object.prototype.hasOwnProperty.call(advanced, "filterDuplicates")){
+    ADVANCED_STATE.filterDuplicates = Boolean(advanced.filterDuplicates);
+  } else {
+    ADVANCED_STATE.filterDuplicates = false;
+  }
+  updateFilterDubsButton();
+  if(!ADVANCED_STATE.filterDuplicates){
+    setAdvancedStatus("");
+  }
+
+  markPreviewDirty();
+  renderDashboard();
+  updateAnalysisButtonState();
+  return await doPreview();
+}
+
+function parseSimpleCsv(text){
+  if(typeof text !== "string") return [];
+  let source = text.replace(/^[\uFEFF]/, "");
+  const rows = [];
+  let row = [];
+  let field = "";
+  let inQuotes = false;
+  for(let i = 0; i < source.length; i += 1){
+    const char = source[i];
+    if(inQuotes){
+      if(char === '"'){
+        if(source[i + 1] === '"'){
+          field += '"';
+          i += 1;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        field += char;
+      }
+      continue;
+    }
+    if(char === '"'){
+      inQuotes = true;
+      continue;
+    }
+    if(char === ','){
+      row.push(field);
+      field = "";
+      continue;
+    }
+    if(char === '\n'){
+      row.push(field);
+      rows.push(row);
+      row = [];
+      field = "";
+      continue;
+    }
+    if(char === '\r'){
+      if(source[i + 1] !== '\n'){
+        row.push(field);
+        rows.push(row);
+        row = [];
+        field = "";
+      }
+      continue;
+    }
+    field += char;
+  }
+  if(inQuotes){
+    throw new Error("Malformed CSV: unmatched quote");
+  }
+  if(field !== "" || row.length){
+    row.push(field);
+    rows.push(row);
+  }
+  return rows.filter((cells) => cells.some((cell) => cell !== ""));
+}
+
+function parsePreferenceCsv(text){
+  const rows = parseSimpleCsv(typeof text === "string" ? text : "");
+  if(rows.length === 0){
+    throw new Error("Preference file is empty");
+  }
+  const header = rows[0];
+  if(header.length < 3){
+    throw new Error("Preference file is missing columns");
+  }
+  const selected = {};
+  const advanced = {};
+  const meta = {};
+  for(let i = 1; i < rows.length; i += 1){
+    const row = rows[i];
+    if(row.length < 3){
+      continue;
+    }
+    const section = (row[0] || "").trim().toLowerCase();
+    const key = row[1];
+    const raw = row[2];
+    if(section === "selected"){
+      try{
+        selected[key] = JSON.parse(raw);
+      }catch(_err){
+        selected[key] = raw;
+      }
+    } else if(section === "advanced"){
+      if(key === "payload"){
+        let parsed = {};
+        try{
+          parsed = JSON.parse(raw);
+        }catch(_err){
+          parsed = {};
+        }
+        if(parsed && typeof parsed === "object" && !Array.isArray(parsed)){
+          Object.assign(advanced, parsed);
+        }
+      } else {
+        try{
+          advanced[key] = JSON.parse(raw);
+        }catch(_err){
+          advanced[key] = raw;
+        }
+      }
+    } else if(section === "meta"){
+      meta[key] = raw;
+    }
+  }
+  return { selected, advanced, meta };
+}
+
+async function handlePreferenceFileSelection(event){
+  const input = event && event.target ? event.target : null;
+  const files = input && input.files ? Array.from(input.files) : [];
+  const file = files.length > 0 ? files[0] : null;
+  if(!file){
+    if(input){
+      input.value = "";
+    }
+    return;
+  }
+  try{
+    if(!Array.isArray(FILTERS_META) || FILTERS_META.length === 0){
+      await loadFilters();
+    }
+    const text = await file.text();
+    const payload = parsePreferenceCsv(text);
+    const combined = { ...payload, selected: payload.selected || {}, advanced: payload.advanced || {} };
+    const success = await applyPreferencePayload(combined);
+    if(!success){
+      alert(`Preference \u201c${file.name}\u201d loaded, but preview failed. Adjust settings if needed.`);
+    } else {
+      alert(`Preference \u201c${file.name}\u201d loaded.`);
+    }
+  }catch(err){
+    console.error("Failed to load preference", err);
+    alert(`Load failed: ${err && err.message ? err.message : err}`);
+  }finally{
+    if(input){
+      input.value = "";
+    }
+  }
+}
+
+function loadPreference(){
+  if(!PREFERENCE_FILE_INPUT){
+    PREFERENCE_FILE_INPUT = document.getElementById("preferenceFileInput");
+    if(PREFERENCE_FILE_INPUT){
+      PREFERENCE_FILE_INPUT.addEventListener("change", handlePreferenceFileSelection);
+    }
+  }
+  if(!PREFERENCE_FILE_INPUT){
+    alert("Preference file input is not available.");
+    return;
+  }
+  PREFERENCE_FILE_INPUT.value = "";
+  PREFERENCE_FILE_INPUT.click();
+}
+
 let CUSTOM_SAVE_COUNTER = 0;
 
 function renderAnalysisOptions(){
@@ -1769,6 +2029,18 @@ document.addEventListener("DOMContentLoaded", () => {
   loadFilters();
   $("#previewBtn")?.addEventListener("click", doPreview);
   $("#downloadBtn")?.addEventListener("click", doDownload);
+  $("#createPreferenceBtn")?.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    createPreference();
+  });
+  $("#loadPreferenceBtn")?.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    loadPreference();
+  });
+  PREFERENCE_FILE_INPUT = document.getElementById("preferenceFileInput");
+  if(PREFERENCE_FILE_INPUT){
+    PREFERENCE_FILE_INPUT.addEventListener("change", handlePreferenceFileSelection);
+  }
   $("#analysisBtn")?.addEventListener("click", (ev) => {
     ev.preventDefault();
     openAnalysisModal();
