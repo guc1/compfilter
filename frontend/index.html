@@ -37,6 +37,10 @@
           <span>Preview count</span>
         </button>
         <span id="previewOut" class="muted preview-indicator"></span>
+        <button id="analysisBtn" class="btn secondary" type="button" disabled>
+          <span class="btn-icon" aria-hidden="true">📊</span>
+          <span>Statistical analysis</span>
+        </button>
         <button id="downloadBtn" class="btn primary">
           <span class="btn-icon" aria-hidden="true">⬇️</span>
           <span>Download CSV</span>
@@ -102,6 +106,30 @@
         <span id="panelHint" class="muted"></span>
       </div>
     </section>
+
+    <div id="analysisModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="analysisTitle">
+      <div class="modal-card card glass">
+        <div class="modal-header">
+          <h3 id="analysisTitle">Statistical analysis</h3>
+          <button id="analysisClose" class="btn ghost icon-only" type="button" aria-label="Close analysis">×</button>
+        </div>
+        <div class="modal-body">
+          <div id="analysisConfig" class="analysis-config">
+            <p class="muted smallprint">Pick the breakdowns to compare with the baseline dataset. Filters that are already active are disabled here.</p>
+            <div class="analysis-config-actions">
+              <button id="analysisSelectAll" class="btn ghost small" type="button">Select all</button>
+              <button id="analysisClear" class="btn ghost small" type="button">Clear</button>
+            </div>
+            <div id="analysisOptions" class="analysis-options"></div>
+            <div class="analysis-run">
+              <button id="analysisRun" class="btn primary" type="button">Perform statistical analysis</button>
+              <span id="analysisStatus" class="muted smallprint"></span>
+            </div>
+          </div>
+          <div id="analysisResults" class="analysis-results hidden"></div>
+        </div>
+      </div>
+    </div>
   </div>
 
   <!-- Try external script first -->

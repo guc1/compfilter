@@ -43,6 +43,29 @@ def api_preview():
         return jsonify({"ok": False, "error": f"Filesystem error: {exc}"}), 500
     return jsonify({"ok": True, "count": int(count)})
 
+
+@app.route("/api/analysis", methods=["POST"])
+def api_analysis():
+    payload = request.get_json(silent=True) or {}
+    sel = payload.get("selected", {})
+    advanced = payload.get("advanced", {})
+    dims_raw = payload.get("dimensions")
+    if isinstance(dims_raw, list):
+        dims = [str(item) for item in dims_raw if isinstance(item, str)]
+    else:
+        dims = []
+    try:
+        result = combinator.statistical_analysis(sel, advanced, dims)
+    except FileNotFoundError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    except OSError as exc:
+        return jsonify({"ok": False, "error": f"Filesystem error: {exc}"}), 500
+    response = {"ok": True}
+    response.update(result)
+    return jsonify(response)
+
 @app.route("/api/download", methods=["POST"])
 def api_download():
     payload = request.get_json(silent=True) or {}

@@ -7,6 +7,8 @@ let SELECTED = {};         // key -> [] OR custom per filter
 let ACTIVE_KEY = null;
 let SBI_FILES = { main: [], sub: [], all: [] };
 let LAST_PREVIEW_COUNT = null;
+let PREVIEW_DIRTY = true;
+let ANALYSIS_SELECTION = new Set(["summary"]);
 
 const ADVANCED_STATE = {
   duplicatesPath: "",
@@ -100,6 +102,13 @@ const SBI_BUCKETS = [
   { id: "all",  label: "All SBI"  }
 ];
 
+const ANALYSIS_DIMENSIONS = [
+  { key: "summary", label: "Overall signals", requires: null, always: true },
+  { key: "rechtsvorm", label: "Rechtsvorm distribution", requires: "rechtsvorm" },
+  { key: "province", label: "Province distribution", requires: "location" },
+  { key: "sbi", label: "SBI distribution", requires: "sbi" },
+];
+
 function getMeta(key){
   return FILTERS_META.find(f => f.key === key) || { key, label: key, type: "multiselect" };
 }
@@ -116,6 +125,7 @@ function clearSelection(key){
   } else {
     SELECTED[key] = [];
   }
+  markPreviewDirty();
 }
 
 function baseSbiSelection(){
@@ -174,6 +184,90 @@ function parseSbiManualCodes(raw){
     }
   });
   return out;
+}
+
+function formatNumber(value, decimals = 0){
+  if(typeof value !== "number" || Number.isNaN(value)){
+    return decimals > 0 ? Number(0).toFixed(decimals) : "0";
+  }
+  if(decimals > 0){
+    return value.toLocaleString(undefined, {
+      minimumFractionDigits: decimals,
+      maximumFractionDigits: decimals,
+    });
+  }
+  return value.toLocaleString();
+}
+
+function formatPercent(value){
+  if(typeof value !== "number" || Number.isNaN(value)){
+    return "0.00%";
+  }
+  return `${value.toFixed(2)}%`;
+}
+
+function createDeltaBadge(diff){
+  const span = document.createElement("span");
+  const value = typeof diff === "number" && !Number.isNaN(diff) ? diff : 0;
+  let cls = "delta delta-neutral";
+  if(value > 0.000001){
+    cls = "delta delta-positive";
+  } else if(value < -0.000001){
+    cls = "delta delta-negative";
+  }
+  span.className = cls;
+  const rounded = value.toFixed(2);
+  span.textContent = `${value > 0 ? "+" : value < 0 ? "" : ""}${rounded} pp`;
+  return span;
+}
+
+function markPreviewDirty(){
+  PREVIEW_DIRTY = true;
+  updateAnalysisButtonState();
+  const modal = document.getElementById("analysisModal");
+  if(modal && !modal.classList.contains("hidden")){
+    const status = document.getElementById("analysisStatus");
+    if(status){
+      status.textContent = "Run a new preview to enable analysis.";
+      status.classList.remove("status-error");
+    }
+  }
+}
+
+function updateAnalysisButtonState(){
+  const btn = document.getElementById("analysisBtn");
+  if(!btn) return;
+  const ready = typeof LAST_PREVIEW_COUNT === "number" && LAST_PREVIEW_COUNT > 0 && !PREVIEW_DIRTY;
+  btn.disabled = !ready;
+  btn.classList.toggle("is-disabled", !ready);
+}
+
+function ensureAnalysisSelection(){
+  if(!(ANALYSIS_SELECTION instanceof Set)){
+    ANALYSIS_SELECTION = new Set();
+  }
+  ANALYSIS_SELECTION.add("summary");
+}
+
+function hasActiveSelection(key){
+  const meta = getMeta(key);
+  const sel = SELECTED[key];
+  if(meta.type === "number"){
+    if(!Array.isArray(sel)) return false;
+    const [mn, mx] = sel;
+    return Boolean((mn && `${mn}`.trim()) || (mx && `${mx}`.trim()));
+  }
+  if(meta.type === "sbi"){
+    return hasSbiSelection(sel);
+  }
+  if(Array.isArray(sel)){
+    return sel.length > 0;
+  }
+  if(sel && typeof sel === "object"){
+    if(key === "sbi") return hasSbiSelection(sel);
+    return Object.values(sel).some(Boolean);
+  }
+  return Boolean(sel);
 }
 
 function setSbiSelectOptions(selectEl, bucket, selected){
@@ -707,6 +801,7 @@ function closePanel(save=false){
       });
       SELECTED[ACTIVE_KEY] = chosen;
     }
+    markPreviewDirty();
   }
   ACTIVE_KEY = null;
   updateAoiUploaderVisibility(null);
@@ -737,6 +832,7 @@ async function loadFilters(){
   }
   await refreshSbiFiles();
   renderDashboard();
+  markPreviewDirty();
 }
 
 async function doPreview(){
@@ -765,12 +861,16 @@ async function doPreview(){
     } else {
       setAdvancedStatus("");
     }
+    PREVIEW_DIRTY = false;
+    updateAnalysisButtonState();
     success = true;
   }catch(err){
     console.error('Preview failed', err);
     LAST_PREVIEW_COUNT = null;
     $("#previewOut").textContent = "Error";
     setAdvancedStatus(err && err.message ? err.message : 'Preview failed', true);
+    PREVIEW_DIRTY = true;
+    updateAnalysisButtonState();
   }
   updateCustomSaveEstimate();
   return success;
@@ -814,6 +914,434 @@ async function doDownload(){
 }
 
 let CUSTOM_SAVE_COUNTER = 0;
+
+function renderAnalysisOptions(){
+  ensureAnalysisSelection();
+  const host = document.getElementById("analysisOptions");
+  if(!host) return;
+  host.innerHTML = "";
+  ANALYSIS_DIMENSIONS.forEach((dim) => {
+    const disabled = dim.requires ? hasActiveSelection(dim.requires) : false;
+    if(dim.always){
+      ANALYSIS_SELECTION.add(dim.key);
+    }
+    if(disabled){
+      ANALYSIS_SELECTION.delete(dim.key);
+    }
+    const label = document.createElement("label");
+    label.className = "analysis-option" + (disabled ? " disabled" : "");
+
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.value = dim.key;
+    input.checked = ANALYSIS_SELECTION.has(dim.key);
+    input.disabled = Boolean(disabled || dim.always);
+    input.addEventListener("change", () => {
+      if(input.checked){
+        ANALYSIS_SELECTION.add(dim.key);
+      } else {
+        if(dim.always){
+          ANALYSIS_SELECTION.add(dim.key);
+          input.checked = true;
+        } else {
+          ANALYSIS_SELECTION.delete(dim.key);
+        }
+      }
+    });
+    label.appendChild(input);
+
+    const textWrap = document.createElement("div");
+    textWrap.className = "analysis-option-text";
+    const title = document.createElement("strong");
+    title.textContent = dim.label;
+    textWrap.appendChild(title);
+    if(dim.always){
+      const hint = document.createElement("span");
+      hint.className = "muted smallprint";
+      hint.textContent = "Always included";
+      textWrap.appendChild(hint);
+    } else if(disabled && dim.requires){
+      const hint = document.createElement("span");
+      hint.className = "muted smallprint";
+      hint.textContent = "Already filtered";
+      textWrap.appendChild(hint);
+    }
+    label.appendChild(textWrap);
+
+    host.appendChild(label);
+  });
+}
+
+function openAnalysisModal(){
+  if(typeof LAST_PREVIEW_COUNT !== "number" || LAST_PREVIEW_COUNT <= 0 || PREVIEW_DIRTY){
+    return;
+  }
+  renderAnalysisOptions();
+  const status = document.getElementById("analysisStatus");
+  if(status){
+    status.textContent = "";
+    status.classList.remove("status-error");
+  }
+  const modal = document.getElementById("analysisModal");
+  if(modal){
+    modal.classList.remove("hidden");
+  }
+}
+
+function closeAnalysisModal(){
+  const modal = document.getElementById("analysisModal");
+  if(modal){
+    modal.classList.add("hidden");
+  }
+}
+
+function selectAllAnalysisDimensions(){
+  ensureAnalysisSelection();
+  ANALYSIS_DIMENSIONS.forEach((dim) => {
+    const disabled = dim.requires ? hasActiveSelection(dim.requires) : false;
+    if(!disabled || dim.always){
+      ANALYSIS_SELECTION.add(dim.key);
+    }
+  });
+  renderAnalysisOptions();
+}
+
+function clearAnalysisDimensions(){
+  ANALYSIS_SELECTION = new Set(["summary"]);
+  renderAnalysisOptions();
+}
+
+async function runAnalysis(){
+  ensureAnalysisSelection();
+  const statusEl = document.getElementById("analysisStatus");
+  const runBtn = document.getElementById("analysisRun");
+  const dims = Array.from(ANALYSIS_SELECTION);
+  if(!dims.includes("summary")){
+    dims.push("summary");
+  }
+  if(dims.length === 0){
+    if(statusEl){
+      statusEl.textContent = "Select at least one breakdown.";
+      statusEl.classList.add("status-error");
+    }
+    return;
+  }
+  if(statusEl){
+    statusEl.textContent = "Running analysis…";
+    statusEl.classList.remove("status-error");
+  }
+  if(runBtn){
+    runBtn.disabled = true;
+  }
+
+  try{
+    const res = await fetch(API("/api/analysis"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        selected: SELECTED,
+        advanced: getAdvancedPayload(),
+        dimensions: dims,
+      }),
+    });
+    const data = await res.json();
+    if(!res.ok || (data && data.ok === false)){
+      throw new Error((data && data.error) || res.statusText || "Analysis failed");
+    }
+    renderAnalysisResults(data);
+    if(statusEl){
+      const total = typeof data.total_rows === "number" ? data.total_rows : null;
+      statusEl.textContent = total !== null ? `Completed for ${formatNumber(total)} row${total === 1 ? "" : "s"}.` : "Analysis completed.";
+    }
+  }catch(err){
+    console.error("Analysis failed", err);
+    if(statusEl){
+      statusEl.textContent = err && err.message ? err.message : "Analysis failed";
+      statusEl.classList.add("status-error");
+    }
+  }finally{
+    if(runBtn){
+      runBtn.disabled = false;
+    }
+  }
+}
+
+function renderAnalysisResults(data){
+  const host = document.getElementById("analysisResults");
+  if(!host){
+    return;
+  }
+  host.innerHTML = "";
+  if(!data || typeof data.total_rows !== "number"){
+    host.classList.add("hidden");
+    return;
+  }
+  host.classList.remove("hidden");
+
+  const total = data.total_rows;
+  const baselineTotal = typeof data.baseline_total_rows === "number" ? data.baseline_total_rows : null;
+
+  const countsWrap = document.createElement("div");
+  countsWrap.className = "analysis-counts";
+
+  const filteredCard = document.createElement("div");
+  filteredCard.className = "count-card";
+  filteredCard.innerHTML = `<div class="count-label">Filtered rows</div><div class="count-value">${formatNumber(total)}</div>`;
+  countsWrap.appendChild(filteredCard);
+
+  if(baselineTotal !== null){
+    const baselineCard = document.createElement("div");
+    baselineCard.className = "count-card";
+    baselineCard.innerHTML = `<div class="count-label">Baseline (ALL)</div><div class="count-value">${formatNumber(baselineTotal)}</div>`;
+    countsWrap.appendChild(baselineCard);
+  }
+
+  host.appendChild(countsWrap);
+
+  const summary = data.summary || {};
+  const metrics = Array.isArray(summary.metrics) ? summary.metrics : [];
+  const highlights = summary.highlights || {};
+  const positives = Array.isArray(highlights.positive) ? highlights.positive : [];
+  const negatives = Array.isArray(highlights.negative) ? highlights.negative : [];
+
+  if((positives && positives.length) || (negatives && negatives.length)){
+    const highlightWrap = document.createElement("div");
+    highlightWrap.className = "analysis-highlights";
+
+    const makeHighlightGroup = (titleText, items) => {
+      if(!items || !items.length) return null;
+      const group = document.createElement("div");
+      group.className = "analysis-highlight-group";
+      const title = document.createElement("h4");
+      title.textContent = titleText;
+      group.appendChild(title);
+      const list = document.createElement("div");
+      list.className = "analysis-highlight-list";
+      items.slice(0, 3).forEach((item) => {
+        const row = document.createElement("div");
+        row.className = "analysis-highlight";
+        const content = document.createElement("div");
+        content.className = "analysis-highlight-content";
+        const strong = document.createElement("strong");
+        strong.textContent = item.label || item.key;
+        content.appendChild(strong);
+        const detail = document.createElement("span");
+        const filteredPct = typeof item.filtered_pct === "number" ? formatPercent(item.filtered_pct) : "–";
+        const baselinePct = typeof item.baseline_pct === "number" ? formatPercent(item.baseline_pct) : "–";
+        detail.textContent = `${filteredPct} vs ${baselinePct}`;
+        content.appendChild(detail);
+        row.appendChild(content);
+        row.appendChild(createDeltaBadge(item.diff_pct));
+        list.appendChild(row);
+      });
+      group.appendChild(list);
+      return group;
+    };
+
+    const posGroup = makeHighlightGroup("Biggest increases", positives);
+    const negGroup = makeHighlightGroup("Biggest decreases", negatives);
+    if(posGroup) highlightWrap.appendChild(posGroup);
+    if(negGroup) highlightWrap.appendChild(negGroup);
+    if(highlightWrap.children.length){
+      host.appendChild(highlightWrap);
+    }
+  }
+
+  if(metrics.length){
+    const block = document.createElement("div");
+    block.className = "analysis-block";
+    const heading = document.createElement("h4");
+    heading.textContent = "Overall signals";
+    block.appendChild(heading);
+    const table = document.createElement("table");
+    table.className = "analysis-table";
+    table.innerHTML = `<thead><tr><th>Metric</th><th>Filtered</th><th>Baseline</th><th>Δ</th></tr></thead>`;
+    const tbody = document.createElement("tbody");
+    metrics.forEach((metric) => {
+      const tr = document.createElement("tr");
+      const nameTd = document.createElement("td");
+      nameTd.textContent = metric.label || metric.key;
+      tr.appendChild(nameTd);
+
+      const filteredTd = document.createElement("td");
+      const filteredPct = typeof metric.filtered_pct === "number" ? formatPercent(metric.filtered_pct) : "–";
+      const filteredAbs = typeof metric.filtered_abs === "number" ? formatNumber(metric.filtered_abs) : "0";
+      filteredTd.innerHTML = `<strong>${filteredPct}</strong><div class="muted smallprint">${filteredAbs} rows</div>`;
+      tr.appendChild(filteredTd);
+
+      const baselineTd = document.createElement("td");
+      const baselinePct = typeof metric.baseline_pct === "number" ? formatPercent(metric.baseline_pct) : "–";
+      const expected = typeof metric.expected_abs === "number" ? formatNumber(Math.round(metric.expected_abs)) : "0";
+      baselineTd.innerHTML = `<strong>${baselinePct}</strong><div class="muted smallprint">expected ${expected}</div>`;
+      tr.appendChild(baselineTd);
+
+      const diffTd = document.createElement("td");
+      diffTd.appendChild(createDeltaBadge(metric.diff_pct));
+      tr.appendChild(diffTd);
+
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    block.appendChild(table);
+
+    const averages = Array.isArray(summary.averages) ? summary.averages.filter(item => item && (item.filtered !== null || item.baseline !== null)) : [];
+    if(averages.length){
+      const avgHeading = document.createElement("h4");
+      avgHeading.textContent = "Averages";
+      block.appendChild(avgHeading);
+      const avgTable = document.createElement("table");
+      avgTable.className = "analysis-table";
+      avgTable.innerHTML = `<thead><tr><th>Metric</th><th>Filtered</th><th>Baseline</th><th>Δ</th></tr></thead>`;
+      const avgBody = document.createElement("tbody");
+      averages.forEach((row) => {
+        const tr = document.createElement("tr");
+        const nameTd = document.createElement("td");
+        nameTd.textContent = row.label || row.key;
+        tr.appendChild(nameTd);
+        const filtered = (typeof row.filtered === "number" && !Number.isNaN(row.filtered)) ? `${formatNumber(row.filtered, 2)}${row.unit ? ` ${row.unit}` : ""}` : "–";
+        const baseline = (typeof row.baseline === "number" && !Number.isNaN(row.baseline)) ? `${formatNumber(row.baseline, 2)}${row.unit ? ` ${row.unit}` : ""}` : "–";
+        const diffVal = (typeof row.diff === "number" && !Number.isNaN(row.diff)) ? `${row.diff >= 0 ? "+" : ""}${formatNumber(row.diff, 2)}${row.unit ? ` ${row.unit}` : ""}` : "–";
+        const filteredTd = document.createElement("td");
+        filteredTd.textContent = filtered;
+        const baselineTd = document.createElement("td");
+        baselineTd.textContent = baseline;
+        const diffTd = document.createElement("td");
+        diffTd.textContent = diffVal;
+        tr.appendChild(filteredTd);
+        tr.appendChild(baselineTd);
+        tr.appendChild(diffTd);
+        avgBody.appendChild(tr);
+      });
+      avgTable.appendChild(avgBody);
+      block.appendChild(avgTable);
+    }
+
+    const multi = summary.multi_kvk || null;
+    if(multi){
+      const multiRow = document.createElement("div");
+      multiRow.className = "analysis-highlight";
+      const content = document.createElement("div");
+      content.className = "analysis-highlight-content";
+      const title = document.createElement("strong");
+      title.textContent = "Multi-vestigingen";
+      content.appendChild(title);
+      const detail = document.createElement("span");
+      const multiPct = typeof multi.filtered_pct === "number" ? formatPercent(multi.filtered_pct) : "–";
+      const basePct = typeof multi.baseline_pct === "number" ? formatPercent(multi.baseline_pct) : "–";
+      const unique = typeof multi.unique === "number" ? formatNumber(multi.unique) : "0";
+      const multiCount = typeof multi.multi === "number" ? formatNumber(multi.multi) : "0";
+      detail.textContent = `${multiPct} vs ${basePct} (${multiCount} of ${unique} unique KVKs)`;
+      content.appendChild(detail);
+      if(typeof multi.expected_multi === "number"){
+        const expect = document.createElement("span");
+        expect.textContent = `Baseline expectation: ${formatNumber(Math.round(multi.expected_multi))}`;
+        content.appendChild(expect);
+      }
+      multiRow.appendChild(content);
+      multiRow.appendChild(createDeltaBadge(multi.diff_pct));
+      block.appendChild(multiRow);
+    }
+
+    const avgDate = summary.avg_oprichtingsdatum || {};
+    if(avgDate && (avgDate.filtered || avgDate.baseline)){
+      const dateRow = document.createElement("div");
+      dateRow.className = "analysis-highlight";
+      const content = document.createElement("div");
+      content.className = "analysis-highlight-content";
+      const title = document.createElement("strong");
+      title.textContent = "Gemiddelde oprichtingsdatum";
+      content.appendChild(title);
+      const detail = document.createElement("span");
+      const filteredText = avgDate.filtered || "–";
+      const baselineText = avgDate.baseline || "–";
+      detail.textContent = `${filteredText} vs ${baselineText}`;
+      content.appendChild(detail);
+      if(typeof avgDate.diff_days === "number" && avgDate.diff_days !== 0){
+        const diffSpan = document.createElement("span");
+        const absDays = Math.abs(avgDate.diff_days);
+        diffSpan.textContent = avgDate.diff_days > 0 ? `${absDays} dagen later` : `${absDays} dagen eerder`;
+        content.appendChild(diffSpan);
+      }
+      dateRow.appendChild(content);
+      if(typeof avgDate.diff_days === "number"){
+        const badge = document.createElement("span");
+        let cls = "delta delta-neutral";
+        if(avgDate.diff_days > 0){
+          cls = "delta delta-positive";
+        } else if(avgDate.diff_days < 0){
+          cls = "delta delta-negative";
+        }
+        badge.className = cls;
+        const sign = avgDate.diff_days > 0 ? "+" : avgDate.diff_days < 0 ? "-" : "";
+        badge.textContent = `${sign}${Math.abs(avgDate.diff_days)} dagen`;
+        dateRow.appendChild(badge);
+      }
+      block.appendChild(dateRow);
+    }
+
+    host.appendChild(block);
+  }
+
+  const groups = data.groups || {};
+  Object.entries(groups).forEach(([key, group]) => {
+    if(!group || !Array.isArray(group.rows) || !group.rows.length){
+      return;
+    }
+    const block = document.createElement("div");
+    block.className = "analysis-block";
+    const title = document.createElement("h4");
+    title.textContent = group.label || key;
+    block.appendChild(title);
+    const table = document.createElement("table");
+    table.className = "analysis-table";
+    table.innerHTML = `<thead><tr><th>Value</th><th>Filtered</th><th>Baseline</th><th>Δ</th></tr></thead>`;
+    const tbody = document.createElement("tbody");
+    group.rows.forEach((row) => {
+      const tr = document.createElement("tr");
+      const nameTd = document.createElement("td");
+      nameTd.textContent = row.value || "(n/a)";
+      tr.appendChild(nameTd);
+      const filteredTd = document.createElement("td");
+      const filteredPct = typeof row.filtered_pct === "number" ? formatPercent(row.filtered_pct) : "–";
+      const filteredAbs = typeof row.filtered_abs === "number" ? formatNumber(row.filtered_abs) : "0";
+      filteredTd.innerHTML = `<strong>${filteredPct}</strong><div class="muted smallprint">${filteredAbs} rows</div>`;
+      tr.appendChild(filteredTd);
+      const baselineTd = document.createElement("td");
+      const baselinePct = typeof row.baseline_pct === "number" ? formatPercent(row.baseline_pct) : "–";
+      const expected = typeof row.expected_abs === "number" ? formatNumber(Math.round(row.expected_abs)) : "0";
+      baselineTd.innerHTML = `<strong>${baselinePct}</strong><div class="muted smallprint">expected ${expected}</div>`;
+      tr.appendChild(baselineTd);
+      const diffTd = document.createElement("td");
+      diffTd.appendChild(createDeltaBadge(row.diff_pct));
+      tr.appendChild(diffTd);
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    block.appendChild(table);
+    if(typeof group.omitted === "number" && group.omitted > 0){
+      const note = document.createElement("div");
+      note.className = "analysis-note";
+      note.textContent = `+ ${group.omitted} additional entr${group.omitted === 1 ? "y" : "ies"} not shown.`;
+      block.appendChild(note);
+    }
+    host.appendChild(block);
+  });
+
+  const warnings = Array.isArray(data.warnings) ? data.warnings.filter(Boolean) : [];
+  if(warnings.length){
+    const warn = document.createElement("div");
+    warn.className = "analysis-warnings";
+    warn.innerHTML = `<strong>Warnings</strong>`;
+    const list = document.createElement("ul");
+    warnings.forEach((msg) => {
+      const li = document.createElement("li");
+      li.textContent = msg;
+      list.appendChild(li);
+    });
+    warn.appendChild(list);
+    host.appendChild(warn);
+  }
+}
 
 function createCustomSaveDestinationElement(initial = {}){
   CUSTOM_SAVE_COUNTER += 1;
@@ -1241,6 +1769,26 @@ document.addEventListener("DOMContentLoaded", () => {
   loadFilters();
   $("#previewBtn")?.addEventListener("click", doPreview);
   $("#downloadBtn")?.addEventListener("click", doDownload);
+  $("#analysisBtn")?.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    openAnalysisModal();
+  });
+  $("#analysisRun")?.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    runAnalysis();
+  });
+  $("#analysisSelectAll")?.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    selectAllAnalysisDimensions();
+  });
+  $("#analysisClear")?.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    clearAnalysisDimensions();
+  });
+  $("#analysisClose")?.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    closeAnalysisModal();
+  });
   $("#filterDubsBtn")?.addEventListener("click", (ev) => {
     ev.preventDefault();
     toggleFilterDubs().catch((err) => {
@@ -1287,6 +1835,15 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#aoiUploadBtn")?.addEventListener("click", handleLocationUpload);
   updateAoiUploaderVisibility(null);
 
+  const analysisModal = document.getElementById("analysisModal");
+  if(analysisModal){
+    analysisModal.addEventListener("click", (ev) => {
+      if(ev.target === analysisModal){
+        closeAnalysisModal();
+      }
+    });
+  }
+
   ensureCustomSaveDefault();
   refreshCustomSaveRemovers();
   updateCustomSaveEstimate();
@@ -1312,6 +1869,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   updateFilterDubsButton();
   setAdvancedStatus("");
+  updateAnalysisButtonState();
 
   document.body.addEventListener("click", (e) => {
     const xBtn = e.target.closest(".chip-x");

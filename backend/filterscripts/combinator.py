@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Dict, List, Generator, Iterable, Tuple, Optional, Set, Any
 
 from ..config import CSV_PATH, CSV_DELIMITER, CSV_ENCODING
+from ..analysis import perform_analysis
 
 # Import every filter module here
 from . import (
@@ -193,6 +194,17 @@ def preview_count(
     header, rows = _stream_rows(CSV_PATH)
     filtered = _apply_filters(rows, header, selected_filters, advanced)
     return sum(1 for _ in filtered)
+
+
+def statistical_analysis(
+    selected_filters: Dict[str, List[str]],
+    advanced: Optional[Dict[str, object]] = None,
+    dimensions: Optional[List[str]] = None,
+) -> Dict[str, object]:
+    header, rows = _stream_rows(CSV_PATH)
+    filtered = _apply_filters(rows, header, selected_filters, advanced)
+    dims = dimensions or []
+    return perform_analysis(header, filtered, dims)
 
 def _apply_filters(
     rows: Iterable[List[str]],
