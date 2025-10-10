@@ -55,21 +55,6 @@ function setDuplicatesPath(rawValue){
   }
 }
 
-function promptForDuplicatesFolder(){
-  const current = ADVANCED_STATE.duplicatesPath || "";
-  const response = window.prompt("Enter the folder path to scan for duplicates:", current);
-  if(response === null){
-    return null;
-  }
-  const trimmed = response.trim();
-  const input = document.getElementById("duplicatesPath");
-  if(input){
-    input.value = trimmed;
-  }
-  setDuplicatesPath(trimmed);
-  return trimmed;
-}
-
 function handleDuplicatesPathInput(event){
   const value = event && event.target ? event.target.value : "";
   setDuplicatesPath(value);
@@ -93,18 +78,12 @@ function handleDuplicatesPathChange(event){
 async function toggleFilterDubs(){
   const turningOn = !ADVANCED_STATE.filterDuplicates;
   if(turningOn && !ADVANCED_STATE.duplicatesPath){
-    const chosen = promptForDuplicatesFolder();
-    if(chosen === null){
-      return;
+    setAdvancedStatus("Provide a folder path before filtering duplicates.", true);
+    const input = document.getElementById("duplicatesPath");
+    if(input){
+      input.focus();
     }
-    if(!chosen){
-      setAdvancedStatus("Provide a folder path before filtering duplicates.", true);
-      const input = document.getElementById("duplicatesPath");
-      if(input){
-        input.focus();
-      }
-      return;
-    }
+    return;
   }
   ADVANCED_STATE.filterDuplicates = !ADVANCED_STATE.filterDuplicates;
   updateFilterDubsButton();
@@ -2264,30 +2243,6 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#analysisClose")?.addEventListener("click", (ev) => {
     ev.preventDefault();
     closeAnalysisModal();
-  });
-  $("#setDuplicatesPathBtn")?.addEventListener("click", (ev) => {
-    ev.preventDefault();
-    const chosen = promptForDuplicatesFolder();
-    if(chosen === null){
-      return;
-    }
-    if(ADVANCED_STATE.filterDuplicates){
-      if(chosen){
-        setAdvancedStatus(`Filtering duplicates from: ${chosen}`, false);
-        doPreview();
-      } else {
-        setAdvancedStatus("Provide a folder path before filtering duplicates.", true);
-      }
-    } else if(chosen){
-      setAdvancedStatus(`Duplicates folder set to: ${chosen}`, false);
-      window.setTimeout(() => {
-        if(!ADVANCED_STATE.filterDuplicates){
-          setAdvancedStatus("");
-        }
-      }, 3200);
-    } else {
-      setAdvancedStatus("");
-    }
   });
   $("#filterDubsBtn")?.addEventListener("click", (ev) => {
     ev.preventDefault();
