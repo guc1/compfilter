@@ -256,6 +256,7 @@ async function runTracking(mode){
   const pathInput = document.getElementById("trackingPath");
   const createBtn = document.getElementById("trackingCreate");
   const updateBtn = document.getElementById("trackingUpdate");
+  const revertBtn = document.getElementById("trackingRevert");
   const targetPath = pathInput && pathInput.value ? pathInput.value.trim() : "";
   const duplicatesInput = document.getElementById("trackingDuplicatesPath");
   let duplicatesPathValue = duplicatesInput && typeof duplicatesInput.value === "string"
@@ -272,7 +273,14 @@ async function runTracking(mode){
   }
   if(createBtn) createBtn.disabled = true;
   if(updateBtn) updateBtn.disabled = true;
-  setTrackingStatus(mode === "update" ? "Updating…" : "Creating…");
+  if(revertBtn) revertBtn.disabled = true;
+  if(mode === "update"){
+    setTrackingStatus("Updating…");
+  } else if(mode === "revert"){
+    setTrackingStatus("Reverting…");
+  } else {
+    setTrackingStatus("Creating…");
+  }
   try{
     const payload = {
       mode,
@@ -300,26 +308,52 @@ async function runTracking(mode){
     if(pathInput && typeof data.path === "string"){
       pathInput.value = data.path;
     }
-    const parts = [];
-    if(typeof data.rows === "number"){
-      parts.push(`${data.rows.toLocaleString()} total rows`);
+    if(mode === "revert"){
+      const removed = data.removed_row || {};
+      const parts = [];
+      const removedId = data.removed_id || removed.id;
+      if(removedId){
+        parts.push(`Removed ID ${removedId}`);
+      }
+      const kvk = removed.kvknumber || data.removed_kvknumber;
+      if(kvk){
+        parts.push(`KVK ${kvk}`);
+      }
+      if(removed.date_added){
+        parts.push(`Added ${removed.date_added}`);
+      }
+      if(typeof data.remaining_rows === "number"){
+        parts.push(`${data.remaining_rows.toLocaleString()} rows remaining`);
+      } else if(typeof data.rows === "number"){
+        parts.push(`${data.rows.toLocaleString()} rows remaining`);
+      }
+      if(data.path){
+        parts.push(`Updated ${data.path}`);
+      }
+      setTrackingStatus(parts.join(" · ") || "Removed latest row.");
+    } else {
+      const parts = [];
+      if(typeof data.rows === "number"){
+        parts.push(`${data.rows.toLocaleString()} total rows`);
+      }
+      if(typeof data.new_rows === "number"){
+        parts.push(`${data.new_rows.toLocaleString()} from current selection`);
+      }
+      if(data.path){
+        parts.push(`Saved to ${data.path}`);
+      }
+      const dupSource = data.duplicates_source || data.duplicates_folder || TRACKING_DUPLICATES_PATH;
+      if(dupSource){
+        parts.push(`Checked duplicates against ${dupSource}`);
+      }
+      setTrackingStatus(parts.join(" · "));
     }
-    if(typeof data.new_rows === "number"){
-      parts.push(`${data.new_rows.toLocaleString()} from current selection`);
-    }
-    if(data.path){
-      parts.push(`Saved to ${data.path}`);
-    }
-    const dupSource = data.duplicates_source || data.duplicates_folder || TRACKING_DUPLICATES_PATH;
-    if(dupSource){
-      parts.push(`Checked duplicates against ${dupSource}`);
-    }
-    setTrackingStatus(parts.join(" · "));
   }catch(err){
     setTrackingStatus(err && err.message ? err.message : String(err), true);
   }finally{
     if(createBtn) createBtn.disabled = false;
     if(updateBtn) updateBtn.disabled = false;
+    if(revertBtn) revertBtn.disabled = false;
   }
 }
 
@@ -2278,6 +2312,10 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#trackingUpdate")?.addEventListener("click", (ev) => {
     ev.preventDefault();
     runTracking("update");
+  });
+  $("#trackingRevert")?.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    runTracking("revert");
   });
   $("#trackingDuplicatesSet")?.addEventListener("click", (ev) => {
     ev.preventDefault();

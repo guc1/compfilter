@@ -442,7 +442,8 @@ def api_tracking_latest():
 @app.route("/api/tracking/run", methods=["POST"])
 def api_tracking_run():
     payload = request.get_json(silent=True) or {}
-    mode = str(payload.get("mode") or "create")
+    mode_raw = str(payload.get("mode") or "create")
+    mode = mode_raw.strip().lower()
     selected = payload.get("selected") or {}
     advanced = payload.get("advanced") or {}
     if not isinstance(selected, dict):
@@ -473,6 +474,22 @@ def api_tracking_run():
         or payload.get("duplicatesSourcePath")
         or payload.get("duplicatesSource")
     )
+
+    if mode == "revert":
+        try:
+            result = tracking.revert_latest_tracking_row(
+                campaign_directory=directory,
+                subcampaign_base=base_name,
+                target_path=target_path,
+            )
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        except OSError as exc:
+            return jsonify({"ok": False, "error": f"Filesystem error: {exc}"}), 500
+
+        response = {"ok": True}
+        response.update(result)
+        return jsonify(response)
 
     try:
         result = tracking.create_or_update_tracking_csv(
