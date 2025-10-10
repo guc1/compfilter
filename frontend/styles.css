@@ -240,6 +240,12 @@ button:focus-visible {
   box-shadow: none;
 }
 
+.btn.ghost.is-active {
+  border-color: rgba(136, 158, 255, 0.4);
+  background: rgba(32, 40, 72, 0.66);
+  box-shadow: 0 12px 28px rgba(36, 68, 160, 0.25);
+}
+
 .btn.ghost:hover {
   background: rgba(30, 36, 60, 0.6);
 }
@@ -274,6 +280,20 @@ button:focus-visible {
 
 .actions {
   margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.action-layer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.action-row {
   display: flex;
   flex-wrap: wrap;
   gap: 12px;
@@ -446,6 +466,9 @@ button:focus-visible {
 }
 
 .preview-indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   min-width: 140px;
   min-height: 20px;
   padding: 6px 14px;
