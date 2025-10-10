@@ -238,6 +238,16 @@ def _apply_filters(
     return filtered
 
 
+def iter_filtered_rows(
+    selected_filters: Dict[str, List[str]],
+    advanced: Optional[Dict[str, object]] = None,
+) -> Tuple[List[str], Iterable[List[str]]]:
+    """Expose header and streaming rows after applying filters."""
+    header, rows = _stream_rows(CSV_PATH)
+    filtered = _apply_filters(rows, header, selected_filters, advanced)
+    return header, filtered
+
+
 def stream_filtered_csv(
     selected_filters: Dict[str, List[str]],
     advanced: Optional[Dict[str, object]] = None,

@@ -6,6 +6,7 @@ from pathlib import Path
 
 from flask import Flask, send_from_directory, jsonify, request, Response
 from backend.filterscripts import combinator
+from backend import tracking
 
 app = Flask(__name__, static_folder="../frontend", static_url_path="")
 
@@ -134,6 +135,10 @@ def api_save():
     payload = request.get_json(silent=True) or {}
     sel = payload.get("selected", {})
     advanced = payload.get("advanced", {})
+    if not isinstance(sel, dict):
+        sel = {}
+    if not isinstance(advanced, dict):
+        advanced = {}
     directory_raw = str(payload.get("directory") or "").strip()
     base_name = str(payload.get("baseName") or payload.get("basename") or "").strip()
     max_rows_raw = payload.get("maxRowsPerFile") or payload.get("max_rows_per_file")
@@ -232,6 +237,7 @@ def api_save():
         except OSError as exc:
             return jsonify({"ok": False, "error": f"Filesystem error: {exc}"}), 500
 
+        tracking.record_campaign_run(sel, advanced, details)
         return jsonify(build_response(files, total_rows, details))
 
     # Fallback to legacy single-destination payload
@@ -260,6 +266,7 @@ def api_save():
     except OSError as exc:
         return jsonify({"ok": False, "error": f"Filesystem error: {exc}"}), 500
 
+    tracking.record_campaign_run(sel, advanced, details)
     return jsonify(build_response(files, total_rows, details, fallback_directory=directory_raw, fallback_max_rows=max_rows))
 
 
@@ -393,6 +400,90 @@ def api_preferences_load():
     }
     if "saved_at" in metadata:
         response["saved_at"] = metadata["saved_at"]
+    return jsonify(response)
+
+
+@app.route("/api/tracking/latest", methods=["GET"])
+def api_tracking_latest():
+    latest = tracking.load_latest_campaign()
+    if not latest:
+        return jsonify({"ok": True, "latest": None})
+
+    directory = latest.get("directory") or ""
+    base_name = latest.get("base_name") or ""
+    default_path = None
+    default_exists = False
+    if directory and base_name:
+        try:
+            default = tracking.default_tracking_path(directory, base_name)
+            default_path = str(default)
+            default_exists = default.exists()
+        except Exception:
+            default_path = None
+            default_exists = False
+
+    response = {
+        "ok": True,
+        "latest": {
+            "timestamp": latest.get("timestamp"),
+            "directory": directory,
+            "campaign": Path(directory).name if directory else "",
+            "base_name": base_name,
+            "default_path": default_path,
+            "default_exists": default_exists,
+            "selected": latest.get("selected") or {},
+            "advanced": latest.get("advanced") or {},
+            "destinations": latest.get("destinations") or [],
+        },
+    }
+    return jsonify(response)
+
+
+@app.route("/api/tracking/run", methods=["POST"])
+def api_tracking_run():
+    payload = request.get_json(silent=True) or {}
+    mode = str(payload.get("mode") or "create")
+    selected = payload.get("selected") or {}
+    advanced = payload.get("advanced") or {}
+    if not isinstance(selected, dict):
+        selected = {}
+    if not isinstance(advanced, dict):
+        advanced = {}
+    directory = (
+        payload.get("campaignDirectory")
+        or payload.get("campaign_directory")
+        or payload.get("directory")
+        or ""
+    )
+    base_name = (
+        payload.get("subcampaign")
+        or payload.get("baseName")
+        or payload.get("base_name")
+        or ""
+    )
+    target_path = (
+        payload.get("targetPath")
+        or payload.get("target_path")
+        or payload.get("csvPath")
+        or payload.get("path")
+    )
+
+    try:
+        result = tracking.create_or_update_tracking_csv(
+            selected=selected,
+            advanced=advanced,
+            campaign_directory=directory,
+            subcampaign_base=base_name,
+            mode=mode,
+            target_path=target_path,
+        )
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    except OSError as exc:
+        return jsonify({"ok": False, "error": f"Filesystem error: {exc}"}), 500
+
+    response = {"ok": True}
+    response.update(result)
     return jsonify(response)
 
 
