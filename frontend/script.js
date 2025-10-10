@@ -12,6 +12,7 @@ let ANALYSIS_SELECTION = new Set(["summary"]);
 let PREFERENCE_FILE_INPUT = null;
 let TRACKING_CONTEXT = null;
 let TRACKING_DUPLICATES_PATH = "";
+let DUPLICATES_PANEL_VISIBLE = false;
 
 const ADVANCED_STATE = {
   duplicatesPath: "",
@@ -34,6 +35,36 @@ function setAdvancedStatus(message, isError = false){
   statusEl.classList.toggle("status-error", Boolean(isError));
 }
 
+function updateDuplicatesToggleButton(){
+  const toggle = document.getElementById("duplicatesToggle");
+  if(!toggle) return;
+  const active = Boolean(DUPLICATES_PANEL_VISIBLE || ADVANCED_STATE.filterDuplicates);
+  toggle.classList.toggle("is-active", active);
+  toggle.setAttribute("aria-expanded", DUPLICATES_PANEL_VISIBLE ? "true" : "false");
+}
+
+function setDuplicatesPanelVisible(visible){
+  DUPLICATES_PANEL_VISIBLE = Boolean(visible);
+  const panel = document.getElementById("advancedSettings");
+  if(panel){
+    panel.classList.toggle("hidden", !DUPLICATES_PANEL_VISIBLE);
+  }
+  updateDuplicatesToggleButton();
+}
+
+function toggleDuplicatesPanel(){
+  const nextVisible = !DUPLICATES_PANEL_VISIBLE;
+  setDuplicatesPanelVisible(nextVisible);
+  if(nextVisible){
+    const input = document.getElementById("duplicatesPath");
+    if(input){
+      window.requestAnimationFrame(() => {
+        input.focus();
+      });
+    }
+  }
+}
+
 function updateFilterDubsButton(){
   const btn = document.getElementById("filterDubsBtn");
   if(!btn) return;
@@ -41,6 +72,7 @@ function updateFilterDubsButton(){
   btn.classList.toggle("is-active", active);
   btn.setAttribute("aria-pressed", active ? "true" : "false");
   btn.textContent = active ? "Filter dubs (on)" : "Filter dubs";
+  updateDuplicatesToggleButton();
 }
 
 function setDuplicatesPath(rawValue){
@@ -89,6 +121,11 @@ async function toggleFilterDubs(){
   }
   ADVANCED_STATE.filterDuplicates = !ADVANCED_STATE.filterDuplicates;
   updateFilterDubsButton();
+  if(ADVANCED_STATE.filterDuplicates){
+    setDuplicatesPanelVisible(true);
+  } else if(!DUPLICATES_PANEL_VISIBLE){
+    updateDuplicatesToggleButton();
+  }
   if(!ADVANCED_STATE.filterDuplicates){
     setAdvancedStatus("");
   }
@@ -1268,6 +1305,11 @@ async function applyPreferencePayload(payload){
   if(!ADVANCED_STATE.filterDuplicates){
     setAdvancedStatus("");
   }
+  if(ADVANCED_STATE.filterDuplicates){
+    setDuplicatesPanelVisible(true);
+  } else if(!DUPLICATES_PANEL_VISIBLE){
+    updateDuplicatesToggleButton();
+  }
 
   markPreviewDirty();
   renderDashboard();
@@ -2286,6 +2328,7 @@ async function removeCustomArea(label){
 }
 
 document.addEventListener("DOMContentLoaded", () => {
+  setDuplicatesPanelVisible(false);
   loadFilters();
   $("#previewBtn")?.addEventListener("click", doPreview);
   $("#downloadBtn")?.addEventListener("click", doDownload);
@@ -2344,6 +2387,10 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#analysisClose")?.addEventListener("click", (ev) => {
     ev.preventDefault();
     closeAnalysisModal();
+  });
+  $("#duplicatesToggle")?.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    toggleDuplicatesPanel();
   });
   $("#filterDubsBtn")?.addEventListener("click", (ev) => {
     ev.preventDefault();

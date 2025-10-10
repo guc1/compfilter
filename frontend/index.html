@@ -32,41 +32,59 @@
       <div id="activeSummary" class="summary"></div>
 
       <div class="actions">
-        <button id="previewBtn" class="btn secondary">
-          <span class="btn-icon" aria-hidden="true">👁️</span>
-          <span>Preview count</span>
-        </button>
-        <span id="previewOut" class="muted preview-indicator"></span>
-        <button id="analysisBtn" class="btn secondary" type="button" disabled>
-          <span class="btn-icon" aria-hidden="true">📊</span>
-          <span>Statistical analysis</span>
-        </button>
-        <button id="downloadBtn" class="btn primary">
-          <span class="btn-icon" aria-hidden="true">⬇️</span>
-          <span>Download CSV</span>
-        </button>
-        <button id="createPreferenceBtn" class="btn ghost">
-          <span class="btn-icon" aria-hidden="true">🆕</span>
-          <span>Create preference</span>
-        </button>
-        <button id="loadPreferenceBtn" class="btn ghost">
-          <span class="btn-icon" aria-hidden="true">📂</span>
-          <span>Load preference</span>
-        </button>
-        <input id="preferenceFileInput" type="file" accept=".csv,text/csv" style="display:none" />
-        <button id="trackingBtn" class="btn ghost">
-          <span class="btn-icon" aria-hidden="true">📈</span>
-          <span>Tracking</span>
-        </button>
-        <button id="customSaveToggle" class="btn ghost">
-          <span class="btn-icon" aria-hidden="true">💾</span>
-          <span>Custom save…</span>
-        </button>
+        <div class="action-layer">
+          <div class="action-row">
+            <button id="previewBtn" class="btn secondary">
+              <span class="btn-icon" aria-hidden="true">👁️</span>
+              <span>Preview count</span>
+            </button>
+            <button id="downloadBtn" class="btn primary">
+              <span class="btn-icon" aria-hidden="true">⬇️</span>
+              <span>Download CSV</span>
+            </button>
+            <button id="customSaveToggle" class="btn ghost" type="button">
+              <span class="btn-icon" aria-hidden="true">💾</span>
+              <span>Custom settings</span>
+            </button>
+            <button id="duplicatesToggle" class="btn ghost" type="button" aria-expanded="false">
+              <span class="btn-icon" aria-hidden="true">🗂️</span>
+              <span>Duplicates</span>
+            </button>
+          </div>
+          <span id="previewOut" class="muted preview-indicator"></span>
+        </div>
+
+        <div class="action-layer">
+          <div class="action-row">
+            <button id="analysisBtn" class="btn secondary" type="button" disabled>
+              <span class="btn-icon" aria-hidden="true">📊</span>
+              <span>Statistical analysis</span>
+            </button>
+            <button id="trackingBtn" class="btn ghost" type="button">
+              <span class="btn-icon" aria-hidden="true">📈</span>
+              <span>Custom tracking</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="action-layer">
+          <div class="action-row">
+            <button id="loadPreferenceBtn" class="btn ghost" type="button">
+              <span class="btn-icon" aria-hidden="true">📂</span>
+              <span>Load preferences</span>
+            </button>
+            <input id="preferenceFileInput" type="file" accept=".csv,text/csv" style="display:none" />
+            <button id="createPreferenceBtn" class="btn ghost" type="button">
+              <span class="btn-icon" aria-hidden="true">🆕</span>
+              <span>Save preferences</span>
+            </button>
+          </div>
+        </div>
       </div>
 
-      <div id="advancedSettings" class="advanced-settings">
+      <div id="advancedSettings" class="advanced-settings hidden">
         <div class="advanced-header">
-          <h3 class="advanced-title">Advanced settings</h3>
+          <h3 class="advanced-title">Duplicates filter</h3>
           <p class="muted smallprint">Filter out rows whose KVK numbers already exist in a folder of previous exports.</p>
         </div>
         <div class="advanced-grid">
