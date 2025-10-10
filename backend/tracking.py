@@ -329,6 +329,24 @@ def create_or_update_tracking_csv(
     if not base_name:
         raise ValueError("Base filename is required to derive campaign metadata.")
 
+    mode_norm = (mode or "create").strip().lower()
+    if target_path:
+        target = Path(target_path).expanduser().resolve()
+    else:
+        target = default_tracking_path(campaign_dir, base_name)
+
+    existing_rows, existing_ids = _read_existing_tracking(target)
+    existing_by_kvk: Dict[str, Dict[str, str]] = {}
+    for row in existing_rows:
+        kvk = row.get("kvknumber") or row.get("kvknummer") or ""
+        kvk = kvk.strip()
+        if not kvk:
+            continue
+        existing_by_kvk[kvk] = row
+
+    if mode_norm == "update" and not target.exists() and not existing_rows:
+        raise ValueError("Tracking CSV does not exist yet. Use create to generate it first.")
+
     filters = FilterColumns.from_selected(selected)
     duplicates_folder_raw = _extract_duplicates_folder(advanced or {})
     duplicates_folder_resolved = ""
@@ -347,9 +365,12 @@ def create_or_update_tracking_csv(
         if not kvk or kvk in seen_kvk:
             continue
         seen_kvk.add(kvk)
-        before_val = ""
-        if duplicates_lookup is not None:
-            before_val = "TRUE" if kvk in duplicates_lookup else "FALSE"
+        previously_used = False
+        if duplicates_lookup is not None and kvk in duplicates_lookup:
+            previously_used = True
+        elif kvk in existing_by_kvk:
+            previously_used = True
+        before_val = "TRUE" if previously_used else "FALSE"
         rows_data.append({
             "kvknumber": kvk,
             "campaign": campaign_dir.name,
@@ -386,25 +407,6 @@ def create_or_update_tracking_csv(
 
     if not rows_data:
         raise ValueError("No rows found for the current selection.")
-
-    mode_norm = (mode or "create").strip().lower()
-    target: Path
-    if target_path:
-        target = Path(target_path).expanduser().resolve()
-    else:
-        target = default_tracking_path(campaign_dir, base_name)
-
-    existing_rows, existing_ids = _read_existing_tracking(target)
-    existing_by_kvk: Dict[str, Dict[str, str]] = {}
-    for row in existing_rows:
-        kvk = row.get("kvknumber") or row.get("kvknummer") or ""
-        kvk = kvk.strip()
-        if not kvk:
-            continue
-        existing_by_kvk[kvk] = row
-
-    if mode_norm == "update" and not target.exists() and not existing_rows:
-        raise ValueError("Tracking CSV does not exist yet. Use create to generate it first.")
 
     results: Dict[str, Dict[str, str]] = {}
     results.update(existing_by_kvk)
