@@ -221,6 +221,7 @@ TRACKING_COLUMNS: Tuple[str, ...] = (
     "kvknumber",
     "campaign",
     "subcampaign",
+    "date_added",
     "economischactief",
     "rechtsvorm",
     "location",
@@ -353,10 +354,12 @@ def create_or_update_tracking_csv(
         before_val = ""
         if duplicates_lookup is not None:
             before_val = "TRUE" if kvk in duplicates_lookup else "FALSE"
+        timestamp = datetime.now().astimezone().isoformat(timespec="seconds")
         rows_data.append({
             "kvknumber": kvk,
             "campaign": campaign_dir.name,
             "subcampaign": base_name,
+            "date_added": timestamp,
             "economischactief": filters.economischactief,
             "rechtsvorm": filters.rechtsvorm,
             "location": filters.location,
@@ -415,4 +418,40 @@ def create_or_update_tracking_csv(
         "new_rows": len(rows_data),
         "duplicates_folder": duplicates_source_resolved,
         "duplicates_source": duplicates_source_resolved,
+    }
+
+
+def revert_latest_tracking_row(
+    *,
+    campaign_directory: str | Path | None = None,
+    subcampaign_base: str | None = None,
+    target_path: str | Path | None = None,
+) -> Dict[str, object]:
+    if target_path:
+        target = Path(target_path).expanduser().resolve()
+    else:
+        campaign_dir = Path(campaign_directory or "").expanduser()
+        if not str(campaign_dir):
+            raise ValueError("Campaign directory is required to locate the tracking CSV.")
+        base_name = (subcampaign_base or "").strip()
+        if not base_name:
+            raise ValueError("Base filename is required to locate the tracking CSV.")
+        target = default_tracking_path(campaign_dir, base_name)
+
+    if not target.exists():
+        raise ValueError("Tracking CSV does not exist yet. Use create to generate it first.")
+
+    existing_rows, _existing_ids = _read_existing_tracking(target)
+    if not existing_rows:
+        raise ValueError("Tracking CSV has no rows to revert.")
+
+    removed_row = existing_rows.pop()
+    _write_tracking_rows(target, existing_rows)
+
+    return {
+        "path": str(target),
+        "rows": len(existing_rows),
+        "removed_row": removed_row,
+        "removed_id": removed_row.get("id"),
+        "remaining_rows": len(existing_rows),
     }
