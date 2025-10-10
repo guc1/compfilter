@@ -90,12 +90,11 @@ def _find_kvk_index(header: List[str]) -> Optional[int]:
     return None
 
 
-def _folder_signature(root: Path, files: List[Path]) -> Tuple[Tuple[str, int, int], ...]:
+def _folder_signature(files: List[Path]) -> Tuple[Tuple[str, int, int], ...]:
     sig: List[Tuple[str, int, int]] = []
     for f in files:
         stat = f.stat()
-        rel = str(f.relative_to(root))
-        sig.append((rel, int(stat.st_size), int(getattr(stat, "st_mtime_ns", int(stat.st_mtime * 1_000_000_000)))))
+        sig.append((f.name, int(stat.st_size), int(getattr(stat, "st_mtime_ns", int(stat.st_mtime * 1_000_000_000)))))
     return tuple(sig)
 
 
@@ -106,14 +105,8 @@ def _load_existing_kvk_numbers(folder: Path) -> Set[str]:
     if not resolved.is_dir():
         raise ValueError(f"Duplicates folder is not a directory: {resolved}")
 
-    files = [
-        p
-        for p in resolved.rglob("*.csv")
-        if p.is_file()
-    ]
-    files.sort(key=lambda path: str(path.relative_to(resolved)))
-
-    signature = _folder_signature(resolved, files)
+    files = [p for p in resolved.iterdir() if p.is_file() and p.suffix.lower() == ".csv"]
+    signature = _folder_signature(files)
     cached = _DUPLICATE_CACHE.get(str(resolved))
     if cached and cached[0] == signature:
         return set(cached[1])
