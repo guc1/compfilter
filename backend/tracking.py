@@ -70,6 +70,8 @@ def _extract_duplicates_folder(advanced: Dict) -> str:
     keys = [
         "duplicatesPath",
         "duplicates_path",
+        "trackingDuplicatesPath",
+        "tracking_duplicates_path",
         "folderPath",
         "folder_path",
         "folder",
@@ -315,6 +317,7 @@ def create_or_update_tracking_csv(
     subcampaign_base: str,
     mode: str,
     target_path: str | Path | None = None,
+    duplicates_source: str | Path | None = None,
 ) -> Dict[str, object]:
     header, rows_iter = combinator.iter_filtered_rows(selected or {}, advanced or {})
     kvk_idx = combinator._find_kvk_index(header)
@@ -330,13 +333,13 @@ def create_or_update_tracking_csv(
         raise ValueError("Base filename is required to derive campaign metadata.")
 
     filters = FilterColumns.from_selected(selected)
-    duplicates_folder_raw = _extract_duplicates_folder(advanced or {})
-    duplicates_folder_resolved = ""
+    raw_duplicates = duplicates_source if duplicates_source else _extract_duplicates_folder(advanced or {})
+    duplicates_source_resolved = ""
     duplicates_lookup: Optional[set[str]] = None
-    if duplicates_folder_raw:
-        folder_path = Path(duplicates_folder_raw).expanduser()
-        duplicates_lookup = combinator._load_existing_kvk_numbers(folder_path)
-        duplicates_folder_resolved = str(folder_path.resolve())
+    if raw_duplicates:
+        lookup_path = Path(raw_duplicates).expanduser()
+        duplicates_lookup = combinator._load_existing_kvk_numbers(lookup_path)
+        duplicates_source_resolved = str(lookup_path.resolve())
 
     seen_kvk: set[str] = set()
     rows_data: List[Dict[str, str]] = []
@@ -395,37 +398,21 @@ def create_or_update_tracking_csv(
         target = default_tracking_path(campaign_dir, base_name)
 
     existing_rows, existing_ids = _read_existing_tracking(target)
-    existing_by_kvk: Dict[str, Dict[str, str]] = {}
-    for row in existing_rows:
-        kvk = row.get("kvknumber") or row.get("kvknummer") or ""
-        kvk = kvk.strip()
-        if not kvk:
-            continue
-        existing_by_kvk[kvk] = row
 
     if mode_norm == "update" and not target.exists() and not existing_rows:
         raise ValueError("Tracking CSV does not exist yet. Use create to generate it first.")
 
-    results: Dict[str, Dict[str, str]] = {}
-    results.update(existing_by_kvk)
-
+    ordered_rows: List[Dict[str, str]] = list(existing_rows)
     for payload in rows_data:
-        kvk = payload["kvknumber"]
-        if kvk in results:
-            existing = results[kvk]
-            payload["id"] = existing.get("id") or _generate_unique_id(existing_ids)
-            existing.update(payload)
-            results[kvk] = existing
-        else:
-            payload["id"] = _generate_unique_id(existing_ids)
-            results[kvk] = payload
+        payload["id"] = _generate_unique_id(existing_ids)
+        ordered_rows.append(payload)
 
-    ordered_rows = sorted(results.values(), key=lambda item: item.get("kvknumber") or "")
     _write_tracking_rows(target, ordered_rows)
 
     return {
         "path": str(target),
         "rows": len(ordered_rows),
         "new_rows": len(rows_data),
-        "duplicates_folder": duplicates_folder_resolved,
+        "duplicates_folder": duplicates_source_resolved,
+        "duplicates_source": duplicates_source_resolved,
     }

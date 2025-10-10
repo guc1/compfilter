@@ -155,6 +155,14 @@
             <label class="label" for="trackingPath">Tracking CSV path</label>
             <input id="trackingPath" type="text" placeholder="/path/to/tracking.csv" autocomplete="off" />
           </div>
+          <div class="tracking-field">
+            <label class="label" for="trackingDuplicatesPath">Duplicates lookup (folder or CSV)</label>
+            <div class="tracking-input-row">
+              <input id="trackingDuplicatesPath" type="text" placeholder="/path/to/folder-or.csv" autocomplete="off" />
+              <button id="trackingDuplicatesSet" class="btn ghost" type="button">Set path…</button>
+            </div>
+            <p class="muted smallprint">Adds a “before” flag by checking whether KVK numbers already exist in the selected folder or CSV file.</p>
+          </div>
           <div class="tracking-actions">
             <button id="trackingCreate" class="btn primary" type="button">Create new CSV</button>
             <button id="trackingUpdate" class="btn secondary" type="button">Update CSV</button>

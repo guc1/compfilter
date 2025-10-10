@@ -467,6 +467,12 @@ def api_tracking_run():
         or payload.get("csvPath")
         or payload.get("path")
     )
+    duplicates_source = (
+        payload.get("trackingDuplicatesPath")
+        or payload.get("tracking_duplicates_path")
+        or payload.get("duplicatesSourcePath")
+        or payload.get("duplicatesSource")
+    )
 
     try:
         result = tracking.create_or_update_tracking_csv(
@@ -476,6 +482,7 @@ def api_tracking_run():
             subcampaign_base=base_name,
             mode=mode,
             target_path=target_path,
+            duplicates_source=duplicates_source,
         )
     except ValueError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400

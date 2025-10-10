@@ -609,6 +609,16 @@ button:focus-visible {
   width: 100%;
 }
 
+.tracking-input-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.tracking-input-row input {
+  flex: 1;
+}
+
 .tracking-actions {
   display: flex;
   flex-wrap: wrap;
