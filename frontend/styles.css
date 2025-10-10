@@ -347,9 +347,24 @@ button:focus-visible {
   align-items: end;
 }
 
+.advanced-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: stretch;
+}
+
 @media (max-width: 720px) {
   .advanced-grid {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .advanced-actions {
+    flex-direction: row;
+  }
+
+  .advanced-actions .btn {
+    flex: 1 1 auto;
   }
 }
 
