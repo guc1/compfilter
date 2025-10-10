@@ -278,6 +278,142 @@ button:focus-visible {
   justify-content: center;
 }
 
+.reminder-panel {
+  position: fixed;
+  top: 32px;
+  right: 32px;
+  width: min(320px, calc(100% - 48px));
+  padding: 18px 20px 20px;
+  border-radius: 18px;
+  border: 1px solid rgba(136, 158, 255, 0.45);
+  background: rgba(12, 16, 30, 0.94);
+  box-shadow: var(--shadow-elevated);
+  backdrop-filter: blur(18px);
+  z-index: 40;
+}
+
+.reminder-panel.reminder-complete {
+  border-color: rgba(95, 216, 160, 0.58);
+  box-shadow: 0 20px 44px rgba(40, 98, 74, 0.42);
+}
+
+.reminder-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.reminder-header-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.reminder-title {
+  font-weight: 600;
+  font-size: 15px;
+}
+
+.reminder-subtitle {
+  font-size: 13px;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.reminder-steps {
+  list-style: none;
+  margin: 16px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.reminder-step {
+  padding: 0;
+  margin: 0;
+}
+
+.reminder-step-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.reminder-step-indicator {
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  background: rgba(132, 150, 240, 0.45);
+  box-shadow: inset 0 0 0 1px rgba(132, 150, 255, 0.4);
+  flex-shrink: 0;
+}
+
+.reminder-step-label {
+  font-weight: 500;
+  flex: 1;
+}
+
+.reminder-step-state {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.reminder-step-note {
+  margin-left: 22px;
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.reminder-step.status-active .reminder-step-indicator {
+  background: var(--accent);
+  box-shadow: 0 0 0 4px rgba(115, 140, 255, 0.24);
+}
+
+.reminder-step.status-active .reminder-step-state {
+  color: var(--accent-strong);
+}
+
+.reminder-step.status-done .reminder-step-indicator {
+  background: #4fd9a7;
+  box-shadow: 0 0 0 4px rgba(79, 217, 167, 0.2);
+}
+
+.reminder-step.status-done .reminder-step-state {
+  color: #73e4bd;
+}
+
+.reminder-step.status-skipped .reminder-step-indicator {
+  background: rgba(255, 196, 111, 0.92);
+  box-shadow: 0 0 0 4px rgba(255, 196, 111, 0.25);
+}
+
+.reminder-step.status-skipped .reminder-step-state {
+  color: rgba(255, 205, 133, 0.92);
+}
+
+.reminder-step.status-active .reminder-step-label,
+.reminder-step.status-done .reminder-step-label {
+  color: var(--text-primary);
+}
+
+.reminder-step.status-idle .reminder-step-state {
+  color: var(--text-muted);
+}
+
+@media (max-width: 720px) {
+  .reminder-panel {
+    right: 20px;
+    left: 20px;
+    top: auto;
+    bottom: 24px;
+    width: auto;
+  }
+}
+
 .actions {
   margin-top: 12px;
   display: flex;

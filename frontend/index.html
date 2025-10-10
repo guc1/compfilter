@@ -78,6 +78,10 @@
               <span class="btn-icon" aria-hidden="true">🆕</span>
               <span>Save preferences</span>
             </button>
+            <button id="reminderToggle" class="btn ghost" type="button" aria-pressed="false">
+              <span class="btn-icon" aria-hidden="true">⏰</span>
+              <span>Reminder</span>
+            </button>
           </div>
         </div>
       </div>
@@ -137,6 +141,17 @@
         <span id="panelHint" class="muted"></span>
       </div>
     </section>
+
+    <div id="workflowReminder" class="reminder-panel hidden" role="region" aria-live="polite" aria-label="Workflow reminder">
+      <div class="reminder-header">
+        <div class="reminder-header-text">
+          <div class="reminder-title">Workflow reminder</div>
+          <div id="reminderSummary" class="reminder-subtitle">Start by selecting a filter.</div>
+        </div>
+        <button id="reminderClose" class="btn ghost small" type="button">Hide</button>
+      </div>
+      <ul id="reminderSteps" class="reminder-steps"></ul>
+    </div>
 
     <div id="analysisModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="analysisTitle">
       <div class="modal-card card glass">
