@@ -90,19 +90,27 @@ def _find_kvk_index(header: List[str]) -> Optional[int]:
     return None
 
 
-def _file_signature(path: Path) -> Tuple[str, int, int]:
+def _file_signature(path: Path, relative_to: Optional[Path] = None) -> Tuple[str, int, int]:
     stat = path.stat()
+    name: str
+    if relative_to is not None:
+        try:
+            name = str(path.relative_to(relative_to))
+        except ValueError:
+            name = path.name
+    else:
+        name = path.name
     return (
-        path.name,
+        name,
         int(stat.st_size),
         int(getattr(stat, "st_mtime_ns", int(stat.st_mtime * 1_000_000_000))),
     )
 
 
-def _folder_signature(files: List[Path]) -> Tuple[Tuple[str, int, int], ...]:
+def _folder_signature(files: List[Path], base: Path) -> Tuple[Tuple[str, int, int], ...]:
     sig: List[Tuple[str, int, int]] = []
     for f in files:
-        sig.append(_file_signature(f))
+        sig.append(_file_signature(f, relative_to=base))
     return tuple(sig)
 
 
@@ -121,8 +129,11 @@ def _load_existing_kvk_numbers(folder: Path) -> Set[str]:
         files = [resolved]
         signature = (_file_signature(resolved),)
     elif resolved.is_dir():
-        files = [p for p in resolved.iterdir() if p.is_file() and p.suffix.lower() == ".csv"]
-        signature = _folder_signature(files)
+        files = sorted(
+            (p for p in resolved.rglob("*.csv") if p.is_file()),
+            key=lambda p: str(p.relative_to(resolved))
+        )
+        signature = _folder_signature(files, resolved)
     else:
         raise ValueError(f"Duplicates path must be a file or directory: {resolved}")
 
