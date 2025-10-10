@@ -10,6 +10,7 @@ let LAST_PREVIEW_COUNT = null;
 let PREVIEW_DIRTY = true;
 let ANALYSIS_SELECTION = new Set(["summary"]);
 let PREFERENCE_FILE_INPUT = null;
+let TRACKING_CONTEXT = null;
 
 const ADVANCED_STATE = {
   duplicatesPath: "",
@@ -94,6 +95,172 @@ async function toggleFilterDubs(){
     ADVANCED_STATE.filterDuplicates = false;
     updateFilterDubsButton();
     await doPreview();
+  }
+}
+
+function setTrackingStatus(message, isError = false){
+  const statusEl = document.getElementById("trackingStatus");
+  if(!statusEl) return;
+  statusEl.textContent = message || "";
+  statusEl.classList.toggle("status-error", Boolean(isError));
+}
+
+function renderTrackingLatest(latest){
+  const host = document.getElementById("trackingLatest");
+  if(!host) return;
+  if(!latest){
+    host.textContent = "No campaign saved yet. Run a custom save to capture metadata.";
+    return;
+  }
+  const lines = [];
+  if(latest.campaign){
+    lines.push(`Campaign: ${latest.campaign}`);
+  }
+  if(latest.base_name){
+    lines.push(`Subcampaign: ${latest.base_name}`);
+  }
+  if(latest.directory){
+    lines.push(`Directory: ${latest.directory}`);
+  }
+  if(latest.timestamp){
+    const stamp = new Date(latest.timestamp);
+    if(!Number.isNaN(stamp.getTime())){
+      lines.push(`Saved: ${stamp.toLocaleString()}`);
+    }
+  }
+  if(latest.default_path){
+    const existsText = latest.default_exists ? " (exists)" : "";
+    lines.push(`Default tracking file: ${latest.default_path}${existsText}`);
+  }
+  host.innerHTML = "";
+  const heading = document.createElement("div");
+  heading.className = "tracking-latest-heading";
+  heading.textContent = "Latest campaign";
+  host.appendChild(heading);
+  const list = document.createElement("ul");
+  list.className = "tracking-latest-list";
+  lines.forEach((text) => {
+    const item = document.createElement("li");
+    item.textContent = text;
+    list.appendChild(item);
+  });
+  if(lines.length === 0){
+    const item = document.createElement("li");
+    item.textContent = "No additional details available.";
+    list.appendChild(item);
+  }
+  host.appendChild(list);
+}
+
+async function refreshTrackingLatest(){
+  const host = document.getElementById("trackingLatest");
+  if(host){
+    host.textContent = "Loading latest campaign…";
+  }
+  try{
+    const res = await fetch(API("/api/tracking/latest"));
+    let data = {};
+    try{ data = await res.json(); } catch(_err){ data = {}; }
+    if(!res.ok || (data && data.ok === false)){
+      throw new Error((data && data.error) || res.statusText || "Failed to load campaign metadata");
+    }
+    if(!data.latest){
+      TRACKING_CONTEXT = null;
+      if(host){
+        host.textContent = "No campaign saved yet. Run a custom save to capture metadata.";
+      }
+      return;
+    }
+    TRACKING_CONTEXT = data.latest;
+    renderTrackingLatest(data.latest);
+    const pathInput = document.getElementById("trackingPath");
+    if(pathInput && typeof data.latest.default_path === "string" && !pathInput.value){
+      pathInput.value = data.latest.default_path;
+    }
+    setTrackingStatus("");
+  }catch(err){
+    TRACKING_CONTEXT = null;
+    if(host){
+      host.textContent = `Failed to load latest campaign: ${err && err.message ? err.message : err}`;
+    }
+  }
+}
+
+function openTrackingModal(){
+  const modal = document.getElementById("trackingModal");
+  if(!modal) return;
+  modal.classList.remove("hidden");
+  setTrackingStatus("");
+  refreshTrackingLatest();
+}
+
+function closeTrackingModal(){
+  const modal = document.getElementById("trackingModal");
+  if(!modal) return;
+  modal.classList.add("hidden");
+}
+
+async function runTracking(mode){
+  if(!TRACKING_CONTEXT){
+    await refreshTrackingLatest();
+    if(!TRACKING_CONTEXT){
+      setTrackingStatus("No campaign metadata available. Run a custom save first.", true);
+      return;
+    }
+  }
+  const ctx = TRACKING_CONTEXT || {};
+  const pathInput = document.getElementById("trackingPath");
+  const createBtn = document.getElementById("trackingCreate");
+  const updateBtn = document.getElementById("trackingUpdate");
+  const targetPath = pathInput && pathInput.value ? pathInput.value.trim() : "";
+  if(mode === "update" && !targetPath){
+    setTrackingStatus("Provide the tracking CSV path to update.", true);
+    if(pathInput){ pathInput.focus(); }
+    return;
+  }
+  if(createBtn) createBtn.disabled = true;
+  if(updateBtn) updateBtn.disabled = true;
+  setTrackingStatus(mode === "update" ? "Updating…" : "Creating…");
+  try{
+    const payload = {
+      mode,
+      selected: SELECTED,
+      advanced: getAdvancedPayload(),
+      campaignDirectory: ctx.directory || ctx.campaign || "",
+      baseName: ctx.base_name || ctx.baseName || "",
+    };
+    if(targetPath){
+      payload.targetPath = targetPath;
+    }
+    const res = await fetch(API("/api/tracking/run"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    let data = {};
+    try{ data = await res.json(); } catch(_err){ data = {}; }
+    if(!res.ok || (data && data.ok === false)){
+      throw new Error((data && data.error) || res.statusText || "Tracking failed");
+    }
+    if(pathInput && typeof data.path === "string"){
+      pathInput.value = data.path;
+    }
+    const parts = [];
+    if(typeof data.rows === "number"){
+      parts.push(`${data.rows.toLocaleString()} total rows`);
+    }
+    if(typeof data.new_rows === "number"){
+      parts.push(`${data.new_rows.toLocaleString()} from current selection`);
+    }
+    if(data.path){
+      parts.push(`Saved to ${data.path}`);
+    }
+    setTrackingStatus(parts.join(" · "));
+  }catch(err){
+    setTrackingStatus(err && err.message ? err.message : String(err), true);
+  }finally{
+    if(createBtn) createBtn.disabled = false;
+    if(updateBtn) updateBtn.disabled = false;
   }
 }
 
@@ -2036,6 +2203,22 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#loadPreferenceBtn")?.addEventListener("click", (ev) => {
     ev.preventDefault();
     loadPreference();
+  });
+  $("#trackingBtn")?.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    openTrackingModal();
+  });
+  $("#trackingClose")?.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    closeTrackingModal();
+  });
+  $("#trackingCreate")?.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    runTracking("create");
+  });
+  $("#trackingUpdate")?.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    runTracking("update");
   });
   PREFERENCE_FILE_INPUT = document.getElementById("preferenceFileInput");
   if(PREFERENCE_FILE_INPUT){

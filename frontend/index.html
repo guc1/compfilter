@@ -54,6 +54,10 @@
           <span>Load preference</span>
         </button>
         <input id="preferenceFileInput" type="file" accept=".csv,text/csv" style="display:none" />
+        <button id="trackingBtn" class="btn ghost">
+          <span class="btn-icon" aria-hidden="true">📈</span>
+          <span>Tracking</span>
+        </button>
         <button id="customSaveToggle" class="btn ghost">
           <span class="btn-icon" aria-hidden="true">💾</span>
           <span>Custom save…</span>
@@ -136,6 +140,26 @@
             </div>
           </div>
           <div id="analysisResults" class="analysis-results hidden"></div>
+        </div>
+      </div>
+    </div>
+    <div id="trackingModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="trackingTitle">
+      <div class="modal-card card glass">
+        <div class="modal-header">
+          <h3 id="trackingTitle">Campaign tracking</h3>
+          <button id="trackingClose" class="btn ghost icon-only" type="button" aria-label="Close tracking">×</button>
+        </div>
+        <div class="modal-body tracking-body">
+          <div id="trackingLatest" class="tracking-latest muted">Loading latest campaign…</div>
+          <div class="tracking-field">
+            <label class="label" for="trackingPath">Tracking CSV path</label>
+            <input id="trackingPath" type="text" placeholder="/path/to/tracking.csv" autocomplete="off" />
+          </div>
+          <div class="tracking-actions">
+            <button id="trackingCreate" class="btn primary" type="button">Create new CSV</button>
+            <button id="trackingUpdate" class="btn secondary" type="button">Update CSV</button>
+          </div>
+          <div id="trackingStatus" class="muted smallprint tracking-status"></div>
         </div>
       </div>
     </div>

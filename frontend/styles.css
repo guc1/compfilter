@@ -578,6 +578,47 @@ button:focus-visible {
   margin-top: 10px;
 }
 
+.tracking-body {
+  gap: 18px;
+}
+
+.tracking-latest {
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.tracking-latest-heading {
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.tracking-latest-list {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 4px;
+}
+
+.tracking-field .label {
+  display: block;
+  margin-bottom: 4px;
+  font-weight: 600;
+}
+
+.tracking-field input {
+  width: 100%;
+}
+
+.tracking-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.tracking-status {
+  min-height: 18px;
+}
+
 .analysis-config {
   display: flex;
   flex-direction: column;
