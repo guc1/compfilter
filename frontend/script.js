@@ -11,12 +11,14 @@ let PREVIEW_DIRTY = true;
 let ANALYSIS_SELECTION = new Set(["summary"]);
 let PREFERENCE_FILE_INPUT = null;
 let TRACKING_CONTEXT = null;
+let TRACKING_DUPLICATES_PATH = "";
 
 const ADVANCED_STATE = {
   duplicatesPath: "",
   filterDuplicates: false,
 };
 const ADVANCED_PATH_STORAGE_KEY = "compfilter.advanced.duplicatesPath";
+const TRACKING_DUPLICATES_STORAGE_KEY = "compfilter.tracking.duplicatesPath";
 
 function getAdvancedPayload(){
   return {
@@ -103,6 +105,40 @@ function setTrackingStatus(message, isError = false){
   if(!statusEl) return;
   statusEl.textContent = message || "";
   statusEl.classList.toggle("status-error", Boolean(isError));
+}
+
+function setTrackingDuplicatesPath(rawValue){
+  const value = typeof rawValue === "string" ? rawValue.trim() : "";
+  TRACKING_DUPLICATES_PATH = value;
+  try{
+    if(value){
+      localStorage.setItem(TRACKING_DUPLICATES_STORAGE_KEY, value);
+    } else {
+      localStorage.removeItem(TRACKING_DUPLICATES_STORAGE_KEY);
+    }
+  }catch(_err){
+    // ignore storage issues
+  }
+  const input = document.getElementById("trackingDuplicatesPath");
+  if(input && input.value !== value){
+    input.value = value;
+  }
+}
+
+function handleTrackingDuplicatesInput(event){
+  const value = event && event.target ? event.target.value : "";
+  setTrackingDuplicatesPath(value);
+}
+
+function promptTrackingDuplicates(){
+  const next = window.prompt(
+    "Enter the folder or CSV file path used to check duplicates:",
+    TRACKING_DUPLICATES_PATH || "",
+  );
+  if(next === null){
+    return;
+  }
+  setTrackingDuplicatesPath(next);
 }
 
 function renderTrackingLatest(latest){
@@ -192,6 +228,14 @@ function openTrackingModal(){
   modal.classList.remove("hidden");
   setTrackingStatus("");
   refreshTrackingLatest();
+  const dupInput = document.getElementById("trackingDuplicatesPath");
+  if(dupInput){
+    if(TRACKING_DUPLICATES_PATH){
+      dupInput.value = TRACKING_DUPLICATES_PATH;
+    } else if(dupInput.value){
+      setTrackingDuplicatesPath(dupInput.value);
+    }
+  }
 }
 
 function closeTrackingModal(){
@@ -213,6 +257,14 @@ async function runTracking(mode){
   const createBtn = document.getElementById("trackingCreate");
   const updateBtn = document.getElementById("trackingUpdate");
   const targetPath = pathInput && pathInput.value ? pathInput.value.trim() : "";
+  const duplicatesInput = document.getElementById("trackingDuplicatesPath");
+  let duplicatesPathValue = duplicatesInput && typeof duplicatesInput.value === "string"
+    ? duplicatesInput.value.trim()
+    : "";
+  if(!duplicatesPathValue && TRACKING_DUPLICATES_PATH && !duplicatesInput){
+    duplicatesPathValue = TRACKING_DUPLICATES_PATH;
+  }
+  setTrackingDuplicatesPath(duplicatesPathValue);
   if(mode === "update" && !targetPath){
     setTrackingStatus("Provide the tracking CSV path to update.", true);
     if(pathInput){ pathInput.focus(); }
@@ -231,6 +283,9 @@ async function runTracking(mode){
     };
     if(targetPath){
       payload.targetPath = targetPath;
+    }
+    if(TRACKING_DUPLICATES_PATH){
+      payload.trackingDuplicatesPath = TRACKING_DUPLICATES_PATH;
     }
     const res = await fetch(API("/api/tracking/run"), {
       method: "POST",
@@ -254,6 +309,10 @@ async function runTracking(mode){
     }
     if(data.path){
       parts.push(`Saved to ${data.path}`);
+    }
+    const dupSource = data.duplicates_source || data.duplicates_folder || TRACKING_DUPLICATES_PATH;
+    if(dupSource){
+      parts.push(`Checked duplicates against ${dupSource}`);
     }
     setTrackingStatus(parts.join(" · "));
   }catch(err){
@@ -2220,6 +2279,10 @@ document.addEventListener("DOMContentLoaded", () => {
     ev.preventDefault();
     runTracking("update");
   });
+  $("#trackingDuplicatesSet")?.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    promptTrackingDuplicates();
+  });
   PREFERENCE_FILE_INPUT = document.getElementById("preferenceFileInput");
   if(PREFERENCE_FILE_INPUT){
     PREFERENCE_FILE_INPUT.addEventListener("change", handlePreferenceFileSelection);
@@ -2320,6 +2383,26 @@ document.addEventListener("DOMContentLoaded", () => {
     duplicatesInput.addEventListener("change", handleDuplicatesPathChange);
   } else {
     setDuplicatesPath("");
+  }
+
+  const trackingDuplicatesInput = document.getElementById("trackingDuplicatesPath");
+  if(trackingDuplicatesInput){
+    trackingDuplicatesInput.addEventListener("input", handleTrackingDuplicatesInput);
+    trackingDuplicatesInput.addEventListener("change", handleTrackingDuplicatesInput);
+    let storedTracking = "";
+    try{
+      storedTracking = localStorage.getItem(TRACKING_DUPLICATES_STORAGE_KEY) || "";
+    }catch(_err){
+      storedTracking = "";
+    }
+    if(storedTracking){
+      TRACKING_DUPLICATES_PATH = storedTracking;
+      trackingDuplicatesInput.value = storedTracking;
+    } else {
+      setTrackingDuplicatesPath(trackingDuplicatesInput.value || "");
+    }
+  } else {
+    TRACKING_DUPLICATES_PATH = "";
   }
 
   updateFilterDubsButton();

@@ -90,24 +90,43 @@ def _find_kvk_index(header: List[str]) -> Optional[int]:
     return None
 
 
+def _file_signature(path: Path) -> Tuple[str, int, int]:
+    stat = path.stat()
+    return (
+        path.name,
+        int(stat.st_size),
+        int(getattr(stat, "st_mtime_ns", int(stat.st_mtime * 1_000_000_000))),
+    )
+
+
 def _folder_signature(files: List[Path]) -> Tuple[Tuple[str, int, int], ...]:
     sig: List[Tuple[str, int, int]] = []
     for f in files:
-        stat = f.stat()
-        sig.append((f.name, int(stat.st_size), int(getattr(stat, "st_mtime_ns", int(stat.st_mtime * 1_000_000_000)))))
+        sig.append(_file_signature(f))
     return tuple(sig)
 
 
 def _load_existing_kvk_numbers(folder: Path) -> Set[str]:
     resolved = folder.expanduser().resolve()
     if not resolved.exists():
-        raise ValueError(f"Duplicates folder does not exist: {resolved}")
-    if not resolved.is_dir():
-        raise ValueError(f"Duplicates folder is not a directory: {resolved}")
+        raise ValueError(f"Duplicates path does not exist: {resolved}")
 
-    files = [p for p in resolved.iterdir() if p.is_file() and p.suffix.lower() == ".csv"]
-    signature = _folder_signature(files)
-    cached = _DUPLICATE_CACHE.get(str(resolved))
+    files: List[Path]
+    signature: Tuple[Tuple[str, int, int], ...]
+    cache_key = str(resolved)
+
+    if resolved.is_file():
+        if resolved.suffix.lower() != ".csv":
+            raise ValueError(f"Duplicates file must be a CSV: {resolved}")
+        files = [resolved]
+        signature = (_file_signature(resolved),)
+    elif resolved.is_dir():
+        files = [p for p in resolved.iterdir() if p.is_file() and p.suffix.lower() == ".csv"]
+        signature = _folder_signature(files)
+    else:
+        raise ValueError(f"Duplicates path must be a file or directory: {resolved}")
+
+    cached = _DUPLICATE_CACHE.get(cache_key)
     if cached and cached[0] == signature:
         return set(cached[1])
 
@@ -137,7 +156,7 @@ def _load_existing_kvk_numbers(folder: Path) -> Set[str]:
     if skipped:
         print(f"[DUPLICATES] skipped {len(skipped)} file(s) without KVK column: {', '.join(skipped[:5])}")
 
-    _DUPLICATE_CACHE[str(resolved)] = (signature, set(kvks))
+    _DUPLICATE_CACHE[cache_key] = (signature, set(kvks))
     return kvks
 
 
