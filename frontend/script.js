@@ -14,6 +14,255 @@ let TRACKING_CONTEXT = null;
 let TRACKING_DUPLICATES_PATH = "";
 let DUPLICATES_PANEL_VISIBLE = false;
 
+const REMINDER_STEPS = [
+  { key: "filter", label: "Select a filter" },
+  { key: "duplicates", label: "Decide on duplicates" },
+  { key: "customSave", label: "Custom save" },
+  { key: "tracking", label: "Add to custom tracking" },
+];
+let REMINDER_ENABLED = false;
+let REMINDER_STATE = {};
+let REMINDER_CYCLE_STARTED = false;
+
+function initReminderState(){
+  REMINDER_STATE = {};
+  REMINDER_STEPS.forEach(({ key }) => {
+    REMINDER_STATE[key] = { status: "idle", note: "" };
+  });
+  REMINDER_CYCLE_STARTED = false;
+}
+
+initReminderState();
+
+function isReminderCycleComplete(){
+  return REMINDER_STEPS.every(({ key }) => {
+    const state = REMINDER_STATE[key];
+    if(!state) return false;
+    if(key === "duplicates"){
+      return state.status === "done" || state.status === "skipped";
+    }
+    return state.status === "done";
+  });
+}
+
+function findNextReminderKey(fromKey){
+  const idx = REMINDER_STEPS.findIndex(step => step.key === fromKey);
+  if(idx === -1) return null;
+  for(let i = idx + 1; i < REMINDER_STEPS.length; i += 1){
+    const key = REMINDER_STEPS[i].key;
+    const state = REMINDER_STATE[key];
+    if(!state) continue;
+    if(state.status === "idle"){
+      return key;
+    }
+    if(state.status === "active"){
+      return null;
+    }
+  }
+  return null;
+}
+
+function markReminderStatus(key, status, note){
+  if(!REMINDER_STATE[key]) return;
+  REMINDER_STATE[key].status = status;
+  if(note !== undefined){
+    REMINDER_STATE[key].note = note ? note : "";
+  } else if(status === "active" && REMINDER_STATE[key].note){
+    REMINDER_STATE[key].note = "";
+  }
+  if(status !== "idle"){
+    REMINDER_CYCLE_STARTED = true;
+  }
+  if((status === "done" || status === "skipped") && !isReminderCycleComplete()){
+    const nextKey = findNextReminderKey(key);
+    if(nextKey && REMINDER_STATE[nextKey] && REMINDER_STATE[nextKey].status === "idle"){
+      REMINDER_STATE[nextKey].status = "active";
+      REMINDER_STATE[nextKey].note = "";
+      REMINDER_CYCLE_STARTED = true;
+    }
+  }
+  renderReminder();
+}
+
+function resetReminderCycle(){
+  initReminderState();
+  renderReminder();
+}
+
+function formatReminderStatus(status){
+  switch(status){
+    case "active":
+      return "In progress";
+    case "done":
+      return "Done";
+    case "skipped":
+      return "Skipped";
+    default:
+      return "Waiting";
+  }
+}
+
+function buildReminderSummary(){
+  if(isReminderCycleComplete()){
+    return "Cycle complete — ready for a new filter.";
+  }
+  if(!REMINDER_CYCLE_STARTED){
+    return "Start by selecting a filter.";
+  }
+  const active = REMINDER_STEPS.find(({ key }) => REMINDER_STATE[key] && REMINDER_STATE[key].status === "active");
+  if(active){
+    return `Now: ${active.label}`;
+  }
+  const pending = REMINDER_STEPS.find(({ key }) => {
+    const state = REMINDER_STATE[key];
+    if(!state) return false;
+    return state.status === "idle";
+  });
+  if(pending){
+    return `Next: ${pending.label}`;
+  }
+  return "Cycle in progress.";
+}
+
+function renderReminder(){
+  const stepsHost = document.getElementById("reminderSteps");
+  if(stepsHost){
+    stepsHost.innerHTML = "";
+    REMINDER_STEPS.forEach(({ key, label }) => {
+      const state = REMINDER_STATE[key] || { status: "idle", note: "" };
+      const item = document.createElement("li");
+      item.className = `reminder-step status-${state.status}`;
+      const main = document.createElement("div");
+      main.className = "reminder-step-main";
+      const indicator = document.createElement("span");
+      indicator.className = "reminder-step-indicator";
+      indicator.setAttribute("aria-hidden", "true");
+      main.appendChild(indicator);
+      const text = document.createElement("span");
+      text.className = "reminder-step-label";
+      text.textContent = label;
+      main.appendChild(text);
+      const stateText = document.createElement("span");
+      stateText.className = "reminder-step-state";
+      stateText.textContent = formatReminderStatus(state.status);
+      main.appendChild(stateText);
+      item.appendChild(main);
+      if(state.note){
+        const noteEl = document.createElement("div");
+        noteEl.className = "reminder-step-note";
+        noteEl.textContent = state.note;
+        item.appendChild(noteEl);
+      }
+      stepsHost.appendChild(item);
+    });
+  }
+  const summaryEl = document.getElementById("reminderSummary");
+  if(summaryEl){
+    summaryEl.textContent = buildReminderSummary();
+  }
+  const panel = document.getElementById("workflowReminder");
+  if(panel){
+    panel.classList.toggle("reminder-complete", isReminderCycleComplete());
+  }
+}
+
+function setReminderVisible(show){
+  REMINDER_ENABLED = Boolean(show);
+  const panel = document.getElementById("workflowReminder");
+  if(panel){
+    panel.classList.toggle("hidden", !REMINDER_ENABLED);
+  }
+  const toggleBtn = document.getElementById("reminderToggle");
+  if(toggleBtn){
+    toggleBtn.classList.toggle("is-active", REMINDER_ENABLED);
+    toggleBtn.setAttribute("aria-pressed", REMINDER_ENABLED ? "true" : "false");
+  }
+  if(REMINDER_ENABLED){
+    renderReminder();
+  }
+}
+
+function toggleReminder(){
+  setReminderVisible(!REMINDER_ENABLED);
+}
+
+function handleReminderFilterOpened(){
+  if(isReminderCycleComplete() || (REMINDER_STATE.customSave && REMINDER_STATE.customSave.status === "done" && REMINDER_STATE.tracking && REMINDER_STATE.tracking.status !== "done")){
+    resetReminderCycle();
+  }
+  if(REMINDER_STATE.filter && REMINDER_STATE.filter.status === "idle"){
+    markReminderStatus("filter", "active");
+  }
+}
+
+function handleReminderFilterSaved(key){
+  if(!key) return;
+  const meta = getMeta(key);
+  const label = meta && meta.label ? meta.label : "Selection";
+  markReminderStatus("filter", "done", `${label} saved.`);
+}
+
+function handleReminderFilterCancelled(){
+  if(REMINDER_STATE.filter && REMINDER_STATE.filter.status !== "done"){
+    markReminderStatus("filter", "active", "Selection not saved yet.");
+  }
+}
+
+function handleReminderDuplicatesDecision(enabled){
+  if(REMINDER_STATE.filter && REMINDER_STATE.filter.status === "idle"){
+    markReminderStatus("filter", "active");
+  }
+  if(REMINDER_STATE.duplicates && REMINDER_STATE.duplicates.status === "idle"){
+    markReminderStatus("duplicates", "active");
+  }
+  const note = enabled ? "Filtering duplicates." : "Keeping duplicates.";
+  markReminderStatus("duplicates", enabled ? "done" : "skipped", note);
+}
+
+function handleReminderCustomSaveOpen(){
+  if(REMINDER_STATE.filter && REMINDER_STATE.filter.status === "idle"){
+    markReminderStatus("filter", "active");
+  }
+  if(REMINDER_STATE.duplicates && (REMINDER_STATE.duplicates.status === "idle" || REMINDER_STATE.duplicates.status === "active")){
+    markReminderStatus("duplicates", "skipped", "Skipped (kept defaults).");
+  }
+  if(REMINDER_STATE.customSave && REMINDER_STATE.customSave.status === "idle"){
+    markReminderStatus("customSave", "active");
+  }
+}
+
+function handleReminderCustomSaveResult(ok, message){
+  if(!ok){
+    if(REMINDER_STATE.customSave && REMINDER_STATE.customSave.status !== "done"){
+      markReminderStatus("customSave", "active", message || "Custom save failed. Try again.");
+    }
+    return;
+  }
+  markReminderStatus("customSave", "done", message || "Custom save complete.");
+}
+
+function handleReminderTrackingOpen(){
+  if(REMINDER_STATE.customSave && REMINDER_STATE.customSave.status !== "done"){
+    if(REMINDER_STATE.customSave.status === "idle"){
+      markReminderStatus("customSave", "active");
+    }
+    return;
+  }
+  if(REMINDER_STATE.tracking && REMINDER_STATE.tracking.status === "idle"){
+    markReminderStatus("tracking", "active");
+  }
+}
+
+function handleReminderTrackingResult(ok, message){
+  if(!ok){
+    if(REMINDER_STATE.tracking && REMINDER_STATE.tracking.status !== "done"){
+      markReminderStatus("tracking", "active", message || "Tracking update failed.");
+    }
+    return;
+  }
+  markReminderStatus("tracking", "done", message || "Tracking updated.");
+}
+
 const ADVANCED_STATE = {
   duplicatesPath: "",
   filterDuplicates: false,
@@ -134,7 +383,10 @@ async function toggleFilterDubs(){
     ADVANCED_STATE.filterDuplicates = false;
     updateFilterDubsButton();
     await doPreview();
+    handleReminderDuplicatesDecision(false);
+    return;
   }
+  handleReminderDuplicatesDecision(Boolean(ADVANCED_STATE.filterDuplicates));
 }
 
 function setTrackingStatus(message, isError = false){
@@ -265,6 +517,7 @@ function openTrackingModal(){
   modal.classList.remove("hidden");
   setTrackingStatus("");
   refreshTrackingLatest();
+  handleReminderTrackingOpen();
   const dupInput = document.getElementById("trackingDuplicatesPath");
   if(dupInput){
     if(TRACKING_DUPLICATES_PATH){
@@ -367,7 +620,9 @@ async function runTracking(mode){
       if(data.path){
         parts.push(`Updated ${data.path}`);
       }
-      setTrackingStatus(parts.join(" · ") || "Removed latest row.");
+      const revertMessage = parts.join(" · ") || "Removed latest row.";
+      setTrackingStatus(revertMessage);
+      handleReminderTrackingResult(true, revertMessage);
     } else {
       const parts = [];
       if(typeof data.rows === "number"){
@@ -383,10 +638,14 @@ async function runTracking(mode){
       if(dupSource){
         parts.push(`Checked duplicates against ${dupSource}`);
       }
-      setTrackingStatus(parts.join(" · "));
+      const statusMessage = parts.join(" · ");
+      setTrackingStatus(statusMessage);
+      handleReminderTrackingResult(true, statusMessage);
     }
   }catch(err){
-    setTrackingStatus(err && err.message ? err.message : String(err), true);
+    const trackingError = err && err.message ? err.message : String(err);
+    setTrackingStatus(trackingError, true);
+    handleReminderTrackingResult(false, trackingError);
   }finally{
     if(createBtn) createBtn.disabled = false;
     if(updateBtn) updateBtn.disabled = false;
@@ -721,6 +980,7 @@ function openPanel(key, force=false){
   }
 
   ACTIVE_KEY = key;
+  handleReminderFilterOpened();
   document.querySelectorAll(".filter-btn").forEach(btn => {
     if(!(btn instanceof HTMLElement)) return;
     btn.classList.toggle("is-active", btn.dataset.key === key);
@@ -1099,7 +1359,10 @@ function closePanel(save=false){
       });
       SELECTED[ACTIVE_KEY] = chosen;
     }
+    handleReminderFilterSaved(ACTIVE_KEY);
     markPreviewDirty();
+  } else if(ACTIVE_KEY){
+    handleReminderFilterCancelled();
   }
   ACTIVE_KEY = null;
   updateAoiUploaderVisibility(null);
@@ -2077,6 +2340,7 @@ function setCustomSaveVisible(show){
     refreshCustomSaveRemovers();
     setCustomSaveStatus('');
     updateCustomSaveEstimate();
+    handleReminderCustomSaveOpen();
   }
 }
 
@@ -2228,7 +2492,9 @@ async function doCustomSave(){
         parts.push(per.join(' · '));
       }
     }
-    setCustomSaveStatus(parts.join(' · '));
+    const statusMessage = parts.join(' · ');
+    setCustomSaveStatus(statusMessage);
+    handleReminderCustomSaveResult(true, statusMessage);
     if(ADVANCED_STATE.filterDuplicates){
       const folder = ADVANCED_STATE.duplicatesPath;
       if(folder){
@@ -2237,8 +2503,11 @@ async function doCustomSave(){
     }
   }catch(err){
     console.error('Custom save failed', err);
-    setCustomSaveStatus('Save failed: ' + (err && err.message ? err.message : err), true);
-    setAdvancedStatus(err && err.message ? err.message : 'Save failed', true);
+    const rawError = err && err.message ? err.message : err;
+    const errorText = rawError ? String(rawError) : 'Save failed';
+    setCustomSaveStatus(`Save failed: ${errorText}`, true);
+    setAdvancedStatus(errorText, true);
+    handleReminderCustomSaveResult(false, `Save failed: ${errorText}`);
   }finally{
     if(runBtn) runBtn.disabled = false;
   }
@@ -2335,6 +2604,14 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#createPreferenceBtn")?.addEventListener("click", (ev) => {
     ev.preventDefault();
     createPreference();
+  });
+  $("#reminderToggle")?.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    toggleReminder();
+  });
+  $("#reminderClose")?.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    setReminderVisible(false);
   });
   $("#loadPreferenceBtn")?.addEventListener("click", (ev) => {
     ev.preventDefault();
@@ -2450,6 +2727,8 @@ document.addEventListener("DOMContentLoaded", () => {
   ensureCustomSaveDefault();
   refreshCustomSaveRemovers();
   updateCustomSaveEstimate();
+  setReminderVisible(false);
+  renderReminder();
 
   const duplicatesInput = document.getElementById("duplicatesPath");
   if(duplicatesInput){
