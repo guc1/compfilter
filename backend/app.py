@@ -66,9 +66,30 @@ def api_filters():
     except Exception:
         loc_opts = []
     print('   location opts:', len(loc_opts))
+    try:
+        options = combinator.get_filter_options()
+    except FileNotFoundError:
+        path = combinator.resolve_csv_path()
+        message = f"CSV file not found: {path}"
+        print(f"[FILTERS] {message}")
+        return jsonify({"ok": False, "error": message}), 500
+    except UnicodeDecodeError as exc:
+        path = combinator.resolve_csv_path()
+        message = f"Failed to decode CSV ({path}): {exc}"
+        print(f"[FILTERS] {message}")
+        return jsonify({"ok": False, "error": message}), 500
+    except (OSError, csv.Error) as exc:
+        message = f"Failed to load filter options: {exc}"
+        print(f"[FILTERS] {message}")
+        return jsonify({"ok": False, "error": message}), 500
+    except Exception as exc:
+        print(f"[FILTERS] unexpected error: {exc}")
+        return jsonify({"ok": False, "error": "Failed to load filter options."}), 500
+
     return jsonify({
+        "ok": True,
         "filters": combinator.list_filters(),
-        "options": combinator.get_filter_options(),
+        "options": options,
     })
 
 @app.route("/api/preview", methods=["POST"])
