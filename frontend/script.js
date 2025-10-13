@@ -13,6 +13,7 @@ let PREFERENCE_FILE_INPUT = null;
 let TRACKING_CONTEXT = null;
 let TRACKING_DUPLICATES_PATH = "";
 let DUPLICATES_PANEL_VISIBLE = false;
+let LAST_FILTER_LOAD_ERROR = "";
 
 const REMINDER_STEPS = [
   { key: "filter", label: "Select a filter" },
@@ -33,6 +34,60 @@ function initReminderState(){
 }
 
 initReminderState();
+
+function escapeHtml(value){
+  return String(value ?? "").replace(/[&<>"']/g, (ch) => {
+    switch(ch){
+      case "&": return "&amp;";
+      case "<": return "&lt;";
+      case ">": return "&gt;";
+      case '"': return "&quot;";
+      case "'": return "&#39;";
+      default: return ch;
+    }
+  });
+}
+
+function setFilterActionsEnabled(enabled){
+  const ids = ["previewBtn", "downloadBtn", "customSaveToggle", "duplicatesToggle"];
+  ids.forEach((id) => {
+    const el = document.getElementById(id);
+    if(!el) return;
+    if(enabled){
+      el.removeAttribute("disabled");
+      el.classList.remove("is-disabled");
+    } else {
+      el.setAttribute("disabled", "disabled");
+      el.classList.add("is-disabled");
+    }
+  });
+}
+
+function handleFilterLoadFailure(message){
+  const fallback = "Failed to load filters.";
+  const trimmed = message && message.trim ? message.trim() : (message || "");
+  const finalMessage = trimmed || fallback;
+  LAST_FILTER_LOAD_ERROR = finalMessage;
+  FILTERS_META = [];
+  FILTER_OPTIONS = {};
+  const host = document.getElementById("filterButtons");
+  if(host){
+    const detail = finalMessage === fallback ? "" : `: ${escapeHtml(finalMessage)}`;
+    host.innerHTML = `<div class="muted status-error">⚠️ Failed to load filters${detail}</div>`;
+  }
+  const summary = document.getElementById("activeSummary");
+  if(summary){
+    summary.innerHTML = "";
+  }
+  const previewOut = document.getElementById("previewOut");
+  if(previewOut){
+    previewOut.textContent = "";
+  }
+  LAST_PREVIEW_COUNT = null;
+  PREVIEW_DIRTY = true;
+  setFilterActionsEnabled(false);
+  updateAnalysisButtonState();
+}
 
 function isReminderCycleComplete(){
   return REMINDER_STEPS.every(({ key }) => {
@@ -1372,28 +1427,62 @@ function closePanel(save=false){
 }
 
 async function loadFilters(){
-  const res = await fetch(API("/api/filters"));
-  const data = await res.json();
-  FILTERS_META = data.filters || [];
-  FILTER_OPTIONS = data.options || {};
-  FILTERS_META.forEach(f => {
-    if(SELECTED[f.key] === undefined){
-      if(f.type === "sbi"){
-        SELECTED[f.key] = baseSbiSelection();
-      } else {
-        SELECTED[f.key] = [];
+  setFilterActionsEnabled(false);
+  let data = {};
+
+  try{
+    const res = await fetch(API("/api/filters"));
+    const text = await res.text();
+    if(text){
+      try{
+        data = JSON.parse(text);
+      }catch(_err){
+        throw new Error("Server returned invalid JSON while loading filters.");
       }
-    } else if(f.type === "sbi"){
-      SELECTED[f.key] = normalizeSbiSelection(SELECTED[f.key]);
+    } else {
+      data = {};
     }
-  });
-  if(Array.isArray(SELECTED.location)){
-    const valid = new Set(FILTER_OPTIONS.location || []);
-    SELECTED.location = SELECTED.location.filter(v => valid.has(v));
+
+    if(!res.ok || (data && data.ok === false)){
+      const message = (data && data.error) ? data.error : (res.statusText || "Failed to load filters.");
+      handleFilterLoadFailure(message);
+      return false;
+    }
+  }catch(err){
+    console.error("Failed to load filters", err);
+    handleFilterLoadFailure(err && err.message ? err.message : "Failed to load filters.");
+    return false;
   }
-  await refreshSbiFiles();
-  renderDashboard();
-  markPreviewDirty();
+
+  try{
+    LAST_FILTER_LOAD_ERROR = "";
+    FILTERS_META = Array.isArray(data.filters) ? data.filters : [];
+    FILTER_OPTIONS = data.options && typeof data.options === "object" ? data.options : {};
+    FILTERS_META.forEach(f => {
+      if(SELECTED[f.key] === undefined){
+        if(f.type === "sbi"){
+          SELECTED[f.key] = baseSbiSelection();
+        } else {
+          SELECTED[f.key] = [];
+        }
+      } else if(f.type === "sbi"){
+        SELECTED[f.key] = normalizeSbiSelection(SELECTED[f.key]);
+      }
+    });
+    if(Array.isArray(SELECTED.location)){
+      const valid = new Set(FILTER_OPTIONS.location || []);
+      SELECTED.location = SELECTED.location.filter(v => valid.has(v));
+    }
+    await refreshSbiFiles();
+    renderDashboard();
+    markPreviewDirty();
+    setFilterActionsEnabled(true);
+    return true;
+  }catch(err){
+    console.error("Failed to initialise filters", err);
+    handleFilterLoadFailure(err && err.message ? err.message : "Failed to initialise filters.");
+    return false;
+  }
 }
 
 async function doPreview(){
@@ -1702,7 +1791,12 @@ async function handlePreferenceFileSelection(event){
   }
   try{
     if(!Array.isArray(FILTERS_META) || FILTERS_META.length === 0){
-      await loadFilters();
+      const loaded = await loadFilters();
+      if(!loaded){
+        const msg = LAST_FILTER_LOAD_ERROR || "Filters are unavailable. Check the CSV path in the backend configuration.";
+        alert(msg);
+        return;
+      }
     }
     const text = await file.text();
     const payload = parsePreferenceCsv(text);
@@ -2553,7 +2647,12 @@ async function handleLocationUpload(){
     const label = 'custom:' + stem;
     ensureLocationSelection(label);
 
-    await loadFilters();
+    const loaded = await loadFilters();
+    if(!loaded){
+      const msg = LAST_FILTER_LOAD_ERROR || 'Filters could not be reloaded. Check the CSV file path and try again.';
+      alert(msg);
+      return;
+    }
     openPanel('location', true);
   }catch(err){
     console.error('Upload error', err);
@@ -2588,7 +2687,12 @@ async function removeCustomArea(label){
     if(Array.isArray(SELECTED.location)){
       SELECTED.location = SELECTED.location.filter(v => v !== label);
     }
-    await loadFilters();
+    const loaded = await loadFilters();
+    if(!loaded){
+      const msg = LAST_FILTER_LOAD_ERROR || 'Filters could not be reloaded. Check the CSV file path and try again.';
+      alert(msg);
+      return;
+    }
     openPanel('location', true);
   }catch(err){
     console.error('Remove error', err);
