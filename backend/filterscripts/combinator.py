@@ -2,7 +2,7 @@
 import csv
 import re
 from pathlib import Path
-from typing import Dict, List, Generator, Iterable, Tuple, Optional, Set, Any
+from typing import Dict, List, Generator, Iterable, Tuple, Optional, Set, Any, Union
 
 from ..config import CSV_PATH, CSV_DELIMITER, CSV_ENCODING
 from ..analysis import perform_analysis
@@ -49,6 +49,84 @@ FILTER_META: Dict[str, Dict[str, str]] = {
     "sbi":                  {"label": "SBI",                "type": "sbi"},
 }
 
+# Filters whose options require scanning the CSV once (large-file optimized)
+_STREAMED_OPTION_SPECS: Dict[str, Dict[str, Any]] = {
+    "economischactief": {
+        "columns": ["economischactief"],
+        "normalize": lambda raw: (raw or "").strip() or "UNKNOWN",
+        "sort": lambda values: sorted(
+            values,
+            key=lambda s: (
+                {"TRUE": 0, "FALSE": 1, "ja": 0, "nee": 1, "1": 0, "0": 1}.get(s.lower(), 100),
+                s.lower(),
+            ),
+        ),
+    },
+    "rechtsvorm": {
+        "columns": ["rechtsvorm"],
+        "normalize": lambda raw: (raw or "").strip() or "UNKNOWN",
+        "sort": lambda values: sorted(values, key=lambda s: (s == "UNKNOWN", s.lower())),
+    },
+}
+
+
+def _collect_streamed_filter_options(csv_path: Path) -> Dict[str, List[str]]:
+    """Collect distinct options for heavy filters in a single CSV pass."""
+    active_specs: Dict[str, Dict[str, Any]] = {
+        key: spec for key, spec in _STREAMED_OPTION_SPECS.items() if key in FILTERS
+    }
+    if not active_specs:
+        return {}
+
+    resolved = _resolve_csv_path(csv_path)
+    with resolved.open("r", encoding=CSV_ENCODING, newline="") as handle:
+        reader = csv.reader(handle, delimiter=CSV_DELIMITER)
+        header = next(reader, [])
+        normalized_header = [_normalize_column_name(col) for col in header]
+        index_map = {name: pos for pos, name in enumerate(normalized_header)}
+
+        trackers: Dict[str, Dict[str, Any]] = {}
+        results: Dict[str, List[str]] = {}
+
+        for key, spec in active_specs.items():
+            columns = [
+                _normalize_column_name(col) for col in spec.get("columns", [])
+            ]
+            idx: Optional[int] = None
+            for cand in columns:
+                if cand in index_map:
+                    idx = index_map[cand]
+                    break
+            if idx is None:
+                results[key] = []
+            else:
+                trackers[key] = {"idx": idx, "values": set(), "spec": spec}
+
+        if not trackers:
+            return results
+
+        for row in reader:
+            for key, data in trackers.items():
+                idx = data["idx"]
+                raw = row[idx] if idx < len(row) else ""
+                normalizer = data["spec"].get("normalize")
+                value = normalizer(raw) if callable(normalizer) else raw
+                if value is None:
+                    continue
+                if not isinstance(value, str):
+                    value = str(value)
+                data["values"].add(value)
+
+        for key, data in trackers.items():
+            sorter = data["spec"].get("sort")
+            values: Set[str] = data["values"]
+            if callable(sorter):
+                results[key] = list(sorter(values))
+            else:
+                results[key] = sorted(values)
+
+    return results
+
 def list_filters() -> List[Dict]:
     out: List[Dict] = []
     for key in FILTERS.keys():
@@ -56,23 +134,64 @@ def list_filters() -> List[Dict]:
         out.append({"key": key, "label": meta["label"], "type": meta["type"]})
     return out
 
+def _resolve_csv_path(path: Union[Path, str]) -> Path:
+    """Return the CSV path with user expansion applied."""
+    if isinstance(path, Path):
+        candidate = path
+    else:
+        candidate = Path(str(path))
+    try:
+        expanded = candidate.expanduser()
+    except Exception:
+        expanded = Path(str(candidate))
+    return expanded
+
+
+def resolve_csv_path() -> Path:
+    """Expose the resolved CSV path for diagnostics."""
+    return _resolve_csv_path(CSV_PATH)
+
+
 def get_filter_options() -> Dict[str, List[str]]:
     """Ask each module for options when it makes sense."""
     opts: Dict[str, List[str]] = {}
+    csv_path = resolve_csv_path()
+    if not csv_path.exists():
+        raise FileNotFoundError(f"CSV file not found: {csv_path}")
+
+    cache_key = (str(csv_path.resolve()), _file_signature(csv_path))
+    cached_streamed = _FILTER_OPTIONS_CACHE.get(cache_key)
+    if cached_streamed is None:
+        streamed = _collect_streamed_filter_options(csv_path)
+        _FILTER_OPTIONS_CACHE[cache_key] = {
+            key: list(values) for key, values in streamed.items()
+        }
+    else:
+        streamed = {key: list(values) for key, values in cached_streamed.items()}
+
+    opts.update(streamed)
+
     for k, mod in FILTERS.items():
-        ftype = FILTER_META.get(k, {}).get("type", "multiselect")
+        if k in opts:
+            continue
         if hasattr(mod, "distinct_values"):
             # For multiselect/group we expose their discrete values (if any)
             try:
-                opts[k] = mod.distinct_values(CSV_PATH)
+                opts[k] = mod.distinct_values(csv_path)
             except TypeError:
                 opts[k] = mod.distinct_values()
+            except (FileNotFoundError, OSError, UnicodeDecodeError, csv.Error):
+                raise
+            except Exception as exc:
+                print(f"[FILTERS] distinct_values error in {k}: {exc}")
+                opts[k] = []
         else:
             opts[k] = []
     return opts
 
 
 _DUPLICATE_CACHE: Dict[str, Tuple[Tuple[Tuple[str, int, int], ...], Set[str]]] = {}
+_FILTER_OPTIONS_CACHE: Dict[Tuple[str, Tuple[str, int, int]], Dict[str, List[str]]] = {}
 _KVK_CANDIDATES = {"kvk", "kvknummer", "kvknr", "kvknumber"}
 
 
@@ -206,7 +325,10 @@ def _apply_duplicate_filter(
     return _iter()
 
 def _stream_rows(csv_path: Path):
-    f = csv_path.open("r", encoding=CSV_ENCODING, newline="")
+    resolved = _resolve_csv_path(csv_path)
+    if not resolved.exists():
+        raise FileNotFoundError(f"CSV file not found: {resolved}")
+    f = resolved.open("r", encoding=CSV_ENCODING, newline="")
     rdr = csv.reader(f, delimiter=CSV_DELIMITER)
     header = next(rdr)
     def _iter():
