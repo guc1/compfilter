@@ -597,6 +597,12 @@ button:focus-visible {
   color: #ff9a9a;
 }
 
+.filter-warning {
+  margin-bottom: 12px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
 .muted {
   color: var(--text-muted);
 }
