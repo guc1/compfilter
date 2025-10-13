@@ -8,6 +8,7 @@ let ACTIVE_KEY = null;
 let SBI_FILES = { main: [], sub: [], all: [] };
 let LAST_PREVIEW_COUNT = null;
 let PREVIEW_DIRTY = true;
+let FILTER_LOAD_WARNINGS = [];
 let ANALYSIS_SELECTION = new Set(["summary"]);
 let PREFERENCE_FILE_INPUT = null;
 let TRACKING_CONTEXT = null;
@@ -932,21 +933,29 @@ function summarizeSelection(key){
 
 function renderDashboard(){
   const btnHost = $("#filterButtons");
-  if(btnHost) btnHost.innerHTML = "";
-  FILTERS_META.forEach(f => {
-    const btn = document.createElement("button");
-    btn.className = "filter-btn";
-    btn.dataset.key = f.key;
-    btn.innerHTML = `<span>${f.label}</span><span class="badge">${summarizeSelection(f.key)}</span>`;
-    if(f.key === ACTIVE_KEY){
-      btn.classList.add("is-active");
-      btn.setAttribute("aria-pressed", "true");
-    } else {
-      btn.setAttribute("aria-pressed", "false");
+  if(btnHost){
+    btnHost.innerHTML = "";
+    if(FILTER_LOAD_WARNINGS.length > 0){
+      const warn = document.createElement("div");
+      warn.className = "status-error filter-warning";
+      warn.textContent = FILTER_LOAD_WARNINGS.join(" ");
+      btnHost.appendChild(warn);
     }
-    btn.addEventListener("click", () => openPanel(f.key));
-    btnHost.appendChild(btn);
-  });
+    FILTERS_META.forEach(f => {
+      const btn = document.createElement("button");
+      btn.className = "filter-btn";
+      btn.dataset.key = f.key;
+      btn.innerHTML = `<span>${f.label}</span><span class="badge">${summarizeSelection(f.key)}</span>`;
+      if(f.key === ACTIVE_KEY){
+        btn.classList.add("is-active");
+        btn.setAttribute("aria-pressed", "true");
+      } else {
+        btn.setAttribute("aria-pressed", "false");
+      }
+      btn.addEventListener("click", () => openPanel(f.key));
+      btnHost.appendChild(btn);
+    });
+  }
 
   const summaryHost = $("#activeSummary");
   if(!summaryHost) return;
@@ -1372,28 +1381,55 @@ function closePanel(save=false){
 }
 
 async function loadFilters(){
-  const res = await fetch(API("/api/filters"));
-  const data = await res.json();
-  FILTERS_META = data.filters || [];
-  FILTER_OPTIONS = data.options || {};
-  FILTERS_META.forEach(f => {
-    if(SELECTED[f.key] === undefined){
-      if(f.type === "sbi"){
-        SELECTED[f.key] = baseSbiSelection();
-      } else {
-        SELECTED[f.key] = [];
-      }
-    } else if(f.type === "sbi"){
-      SELECTED[f.key] = normalizeSbiSelection(SELECTED[f.key]);
+  FILTER_LOAD_WARNINGS = [];
+  try{
+    const res = await fetch(API("/api/filters"));
+    let payload = null;
+    try{
+      payload = await res.json();
+    }catch(parseErr){
+      console.error("Failed to parse /api/filters response", parseErr);
+      payload = null;
     }
-  });
-  if(Array.isArray(SELECTED.location)){
-    const valid = new Set(FILTER_OPTIONS.location || []);
-    SELECTED.location = SELECTED.location.filter(v => valid.has(v));
+    if(!res.ok){
+      const message = payload && payload.error ? payload.error : (res.statusText || "Failed to load filters");
+      throw new Error(message);
+    }
+    const data = payload && typeof payload === "object" ? payload : {};
+    FILTERS_META = Array.isArray(data.filters) ? data.filters : [];
+    FILTER_OPTIONS = data.options && typeof data.options === "object" ? data.options : {};
+    if(Array.isArray(data.warnings)){
+      FILTER_LOAD_WARNINGS = data.warnings
+        .map(w => typeof w === "string" ? w.trim() : "")
+        .filter(Boolean);
+    }
+    FILTERS_META.forEach(f => {
+      if(SELECTED[f.key] === undefined){
+        if(f.type === "sbi"){
+          SELECTED[f.key] = baseSbiSelection();
+        } else {
+          SELECTED[f.key] = [];
+        }
+      } else if(f.type === "sbi"){
+        SELECTED[f.key] = normalizeSbiSelection(SELECTED[f.key]);
+      }
+    });
+    if(Array.isArray(SELECTED.location)){
+      const valid = new Set(FILTER_OPTIONS.location || []);
+      SELECTED.location = SELECTED.location.filter(v => valid.has(v));
+    }
+    await refreshSbiFiles();
+    renderDashboard();
+    markPreviewDirty();
+  }catch(err){
+    console.error("Failed to load filters", err);
+    FILTERS_META = [];
+    FILTER_OPTIONS = {};
+    if(!Array.isArray(FILTER_LOAD_WARNINGS) || FILTER_LOAD_WARNINGS.length === 0){
+      FILTER_LOAD_WARNINGS = [err && err.message ? err.message : "Failed to load filters"];
+    }
+    renderDashboard();
   }
-  await refreshSbiFiles();
-  renderDashboard();
-  markPreviewDirty();
 }
 
 async function doPreview(){

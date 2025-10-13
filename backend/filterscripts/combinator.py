@@ -49,6 +49,32 @@ FILTER_META: Dict[str, Dict[str, str]] = {
     "sbi":                  {"label": "SBI",                "type": "sbi"},
 }
 
+_OPTION_WARNINGS: List[str] = []
+
+
+def _record_option_warning(message: str) -> None:
+    if message and message not in _OPTION_WARNINGS:
+        _OPTION_WARNINGS.append(message)
+
+
+def consume_option_warnings() -> List[str]:
+    warnings = list(_OPTION_WARNINGS)
+    _OPTION_WARNINGS.clear()
+    return warnings
+
+
+def resolved_csv_path() -> Path:
+    """Return the configured CSV path with environment/user expansion applied."""
+    try:
+        expanded = CSV_PATH.expanduser()
+    except AttributeError:
+        expanded = Path(CSV_PATH)
+    try:
+        return expanded.resolve()
+    except OSError:
+        return expanded
+
+
 def list_filters() -> List[Dict]:
     out: List[Dict] = []
     for key in FILTERS.keys():
@@ -58,17 +84,38 @@ def list_filters() -> List[Dict]:
 
 def get_filter_options() -> Dict[str, List[str]]:
     """Ask each module for options when it makes sense."""
+    _OPTION_WARNINGS.clear()
     opts: Dict[str, List[str]] = {}
+    csv_path = resolved_csv_path()
+    if not csv_path.exists():
+        msg = f"Configured CSV not found: {csv_path}"
+        print(f"[FILTERS] {msg}")
+        _record_option_warning(msg)
+        for k in FILTERS.keys():
+            opts[k] = []
+        return opts
+
     for k, mod in FILTERS.items():
-        ftype = FILTER_META.get(k, {}).get("type", "multiselect")
-        if hasattr(mod, "distinct_values"):
-            # For multiselect/group we expose their discrete values (if any)
+        opts[k] = []
+        if not hasattr(mod, "distinct_values"):
+            continue
+        try:
             try:
-                opts[k] = mod.distinct_values(CSV_PATH)
+                opts[k] = mod.distinct_values(csv_path)
             except TypeError:
                 opts[k] = mod.distinct_values()
-        else:
-            opts[k] = []
+        except FileNotFoundError as exc:
+            msg = f"CSV not available for {k}: {exc}"
+            print(f"[FILTERS] {msg}")
+            _record_option_warning(msg)
+        except OSError as exc:
+            msg = f"Filesystem error for {k}: {exc}"
+            print(f"[FILTERS] {msg}")
+            _record_option_warning(msg)
+        except Exception as exc:
+            msg = f"Failed to load options for {k}: {exc}"
+            print(f"[FILTERS] {msg}")
+            _record_option_warning(msg)
     return opts
 
 
@@ -221,7 +268,7 @@ def preview_count(
     selected_filters: Dict[str, List[str]],
     advanced: Optional[Dict[str, object]] = None,
 ) -> int:
-    header, rows = _stream_rows(CSV_PATH)
+    header, rows = _stream_rows(resolved_csv_path())
     filtered = _apply_filters(rows, header, selected_filters, advanced)
     return sum(1 for _ in filtered)
 
@@ -231,7 +278,7 @@ def statistical_analysis(
     advanced: Optional[Dict[str, object]] = None,
     dimensions: Optional[List[str]] = None,
 ) -> Dict[str, object]:
-    header, rows = _stream_rows(CSV_PATH)
+    header, rows = _stream_rows(resolved_csv_path())
     filtered = _apply_filters(rows, header, selected_filters, advanced)
     dims = dimensions or []
     return perform_analysis(header, filtered, dims)
@@ -273,7 +320,7 @@ def iter_filtered_rows(
     advanced: Optional[Dict[str, object]] = None,
 ) -> Tuple[List[str], Iterable[List[str]]]:
     """Expose header and streaming rows after applying filters."""
-    header, rows = _stream_rows(CSV_PATH)
+    header, rows = _stream_rows(resolved_csv_path())
     filtered = _apply_filters(rows, header, selected_filters, advanced)
     return header, filtered
 
@@ -284,7 +331,7 @@ def stream_filtered_csv(
 ) -> Generator[str, None, None]:
     """Yield properly quoted CSV lines with CRLF line endings and a UTF-8 BOM."""
     import io
-    header, rows = _stream_rows(CSV_PATH)
+    header, rows = _stream_rows(resolved_csv_path())
 
     def writer_line(row: List[str]) -> str:
         buf = io.StringIO()

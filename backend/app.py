@@ -66,10 +66,15 @@ def api_filters():
     except Exception:
         loc_opts = []
     print('   location opts:', len(loc_opts))
-    return jsonify({
+    options = combinator.get_filter_options()
+    warnings = combinator.consume_option_warnings()
+    response = {
         "filters": combinator.list_filters(),
-        "options": combinator.get_filter_options(),
-    })
+        "options": options,
+    }
+    if warnings:
+        response["warnings"] = warnings
+    return jsonify(response)
 
 @app.route("/api/preview", methods=["POST"])
 def api_preview():
