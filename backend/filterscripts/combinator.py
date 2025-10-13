@@ -2,7 +2,7 @@
 import csv
 import re
 from pathlib import Path
-from typing import Dict, List, Generator, Iterable, Tuple, Optional, Set, Any
+from typing import Dict, List, Generator, Iterable, Tuple, Optional, Set, Any, Union
 
 from ..config import CSV_PATH, CSV_DELIMITER, CSV_ENCODING
 from ..analysis import perform_analysis
@@ -56,17 +56,43 @@ def list_filters() -> List[Dict]:
         out.append({"key": key, "label": meta["label"], "type": meta["type"]})
     return out
 
+def _resolve_csv_path(path: Union[Path, str]) -> Path:
+    """Return the CSV path with user expansion applied."""
+    if isinstance(path, Path):
+        candidate = path
+    else:
+        candidate = Path(str(path))
+    try:
+        expanded = candidate.expanduser()
+    except Exception:
+        expanded = Path(str(candidate))
+    return expanded
+
+
+def resolve_csv_path() -> Path:
+    """Expose the resolved CSV path for diagnostics."""
+    return _resolve_csv_path(CSV_PATH)
+
+
 def get_filter_options() -> Dict[str, List[str]]:
     """Ask each module for options when it makes sense."""
     opts: Dict[str, List[str]] = {}
+    csv_path = resolve_csv_path()
+    if not csv_path.exists():
+        raise FileNotFoundError(f"CSV file not found: {csv_path}")
+
     for k, mod in FILTERS.items():
-        ftype = FILTER_META.get(k, {}).get("type", "multiselect")
         if hasattr(mod, "distinct_values"):
             # For multiselect/group we expose their discrete values (if any)
             try:
-                opts[k] = mod.distinct_values(CSV_PATH)
+                opts[k] = mod.distinct_values(csv_path)
             except TypeError:
                 opts[k] = mod.distinct_values()
+            except (FileNotFoundError, OSError, UnicodeDecodeError, csv.Error):
+                raise
+            except Exception as exc:
+                print(f"[FILTERS] distinct_values error in {k}: {exc}")
+                opts[k] = []
         else:
             opts[k] = []
     return opts
@@ -206,7 +232,10 @@ def _apply_duplicate_filter(
     return _iter()
 
 def _stream_rows(csv_path: Path):
-    f = csv_path.open("r", encoding=CSV_ENCODING, newline="")
+    resolved = _resolve_csv_path(csv_path)
+    if not resolved.exists():
+        raise FileNotFoundError(f"CSV file not found: {resolved}")
+    f = resolved.open("r", encoding=CSV_ENCODING, newline="")
     rdr = csv.reader(f, delimiter=CSV_DELIMITER)
     header = next(rdr)
     def _iter():
