@@ -16,7 +16,9 @@ Only constraints that are present are applied (AND logic).
 
 import csv
 from typing import Iterable, List, Generator, Optional, Dict, Set, Tuple
+
 from ..config import CSV_DELIMITER, CSV_ENCODING
+from .runtime import FilterContext
 
 FILTER_KEY = "vestiging"
 
@@ -45,7 +47,13 @@ def distinct_values(*_a, **_k) -> List[str]:
     """Return gebruiksdoel choices; UI will add the other controls."""
     return GEBRUIKSDOEL_OPTIONS
 
-def _find_col(header: List[str], candidates: List[str]) -> Optional[int]:
+def _find_col(
+    header: List[str],
+    candidates: List[str],
+    context: Optional[FilterContext] = None,
+) -> Optional[int]:
+    if context is not None:
+        return context.index_for_candidates(candidates)
     norm = [h.strip().lower() for h in header]
     for c in candidates:
         c2 = c.strip().lower()
@@ -119,60 +127,68 @@ def _parse_tokens(selected_values: List[str]) -> Dict[str, object]:
     return {"gd": gd, "hv": hv, "nm": nm, "oppmin": oppmin, "oppmax": oppmax}
 
 def apply(rows_iter: Iterable[List[str]], header: List[str], selected_values: List[str]) -> Generator[List[str], None, None]:
+    context = FilterContext.from_header(header)
+    yield from apply_with_context(rows_iter, header, selected_values, context)
+
+
+def apply_with_context(
+    rows_iter: Iterable[List[str]],
+    header: List[str],
+    selected_values: List[str],
+    context: FilterContext,
+) -> Iterable[List[str]]:
     cons = _parse_tokens(selected_values)
 
-    # If nothing selected at all -> passthrough
     if not cons["gd"] and cons["hv"] is None and cons["nm"] is None and cons["oppmin"] is None and cons["oppmax"] is None:
-        yield from rows_iter
-        return
+        return rows_iter
 
-    # Column indices
-    gd_idx   = _find_col(header, ["gebruiksdoelverblijfsobject", "gebruiksdoel", "gebruiksdoel_verblijfsobject"])
-    hv_idx   = _find_col(header, ["hoofdvestiging", "is_hoofdv", "ishoofdvestiging"])
-    nm_idx   = _find_col(header, ["kvk_non_mailing_indicator", "non_mailing_indicator", "nonmailing", "non_mailing"])
-    opp_idx  = _find_col(header, ["oppervlakteverblijfsobject", "oppervlakte", "oppervlakte_verblijfsobject"])
+    gd_idx = _find_col(header, ["gebruiksdoelverblijfsobject", "gebruiksdoel", "gebruiksdoel_verblijfsobject"], context)
+    hv_idx = _find_col(header, ["hoofdvestiging", "is_hoofdv", "ishoofdvestiging"], context)
+    nm_idx = _find_col(header, ["kvk_non_mailing_indicator", "non_mailing_indicator", "nonmailing", "non_mailing"], context)
+    opp_idx = _find_col(header, ["oppervlakteverblijfsobject", "oppervlakte", "oppervlakte_verblijfsobject"], context)
 
-    # If a constraint exists for a column we can't find, then nothing can match
     if cons["gd"] and gd_idx is None:
-        return
+        return []
     if cons["hv"] is not None and hv_idx is None:
-        return
+        return []
     if cons["nm"] is not None and nm_idx is None:
-        return
+        return []
     if (cons["oppmin"] is not None or cons["oppmax"] is not None) and opp_idx is None:
-        return
+        return []
 
-    # Defaults for open-ended range
     INF = 10**18
     umin = 0 if cons["oppmin"] is None else cons["oppmin"]
     umax = INF if cons["oppmax"] is None else cons["oppmax"]
 
     want_gd: Set[str] = set(x.strip() for x in cons["gd"]) if cons["gd"] else set()
+    want_gd_norm = {" ".join(val.lower().split()) for val in want_gd}
 
-    for row in rows_iter:
-        ok = True
+    def _iter() -> Generator[List[str], None, None]:
+        for row in rows_iter:
+            ok = True
 
-        if ok and want_gd:
-            val = (row[gd_idx] if gd_idx is not None and gd_idx < len(row) else "")
-            v = " ".join(val.strip().lower().split()) if val else "unknown"
-            # Compare lowercase normalized
-            ok = (v in {s.lower() for s in want_gd})
+            if ok and want_gd:
+                val = (row[gd_idx] if gd_idx is not None and gd_idx < len(row) else "")
+                v = " ".join(val.strip().lower().split()) if val else "unknown"
+                ok = (v in want_gd_norm)
 
-        if ok and cons["hv"] is not None:
-            val = row[hv_idx] if hv_idx is not None and hv_idx < len(row) else None
-            ok = (_truthy(val) == cons["hv"])
+            if ok and cons["hv"] is not None:
+                val = row[hv_idx] if hv_idx is not None and hv_idx < len(row) else None
+                ok = (_truthy(val) == cons["hv"])
 
-        if ok and cons["nm"] is not None:
-            val = row[nm_idx] if nm_idx is not None and nm_idx < len(row) else None
-            ok = (_truthy(val) == cons["nm"])
+            if ok and cons["nm"] is not None:
+                val = row[nm_idx] if nm_idx is not None and nm_idx < len(row) else None
+                ok = (_truthy(val) == cons["nm"])
 
-        if ok and (cons["oppmin"] is not None or cons["oppmax"] is not None):
-            raw = row[opp_idx] if opp_idx is not None and opp_idx < len(row) else None
-            vv = _to_int_or_none(raw)
-            if vv is None:
-                ok = False
-            else:
-                ok = (umin <= vv <= umax)
+            if ok and (cons["oppmin"] is not None or cons["oppmax"] is not None):
+                raw = row[opp_idx] if opp_idx is not None and opp_idx < len(row) else None
+                vv = _to_int_or_none(raw)
+                if vv is None:
+                    ok = False
+                else:
+                    ok = (umin <= vv <= umax)
 
-        if ok:
-            yield row
+            if ok:
+                yield row
+
+    return _iter()

@@ -1,16 +1,10 @@
-"""Filter 'overige' combining:
-- oprichtingsdatum range (date_min/date_max in ISO from UI date inputs)
-- tradenames presence TRUE/FALSE (tri-state)
-
-Tokens from UI:
-  - date_min=YYYY-MM-DD
-  - date_max=YYYY-MM-DD
-  - tn=TRUE | tn=FALSE
-"""
+"""Filter 'overige' combining oprichtingsdatum and tradenames constraints."""
 
 from typing import Iterable, List, Generator, Optional, Dict
 import re
 from datetime import date
+
+from .runtime import FilterContext
 
 FILTER_KEY = "overige"
 
@@ -29,7 +23,13 @@ def name() -> str:
 def distinct_values(*_a, **_k) -> List[str]:
     return []  # group UI provides inputs
 
-def _find_col(header: List[str], candidates: List[str]) -> Optional[int]:
+def _find_col(
+    header: List[str],
+    candidates: List[str],
+    context: Optional[FilterContext] = None,
+) -> Optional[int]:
+    if context is not None:
+        return context.index_for_candidates(candidates)
     norm = [h.strip().lower() for h in header]
     for c in candidates:
         c2 = c.strip().lower()
@@ -105,35 +105,47 @@ def _parse_tokens(selected_values: List[str]) -> Dict[str, object]:
     return {"date_min": dmin, "date_max": dmax, "tn": tn}
 
 def apply(rows_iter: Iterable[List[str]], header: List[str], selected_values: List[str]) -> Generator[List[str], None, None]:
+    context = FilterContext.from_header(header)
+    yield from apply_with_context(rows_iter, header, selected_values, context)
+
+
+def apply_with_context(
+    rows_iter: Iterable[List[str]],
+    header: List[str],
+    selected_values: List[str],
+    context: FilterContext,
+) -> Iterable[List[str]]:
     cons = _parse_tokens(selected_values)
     if cons["date_min"] is None and cons["date_max"] is None and cons["tn"] is None:
-        yield from rows_iter
-        return
+        return rows_iter
 
-    d_idx = _find_col(header, DATE_COL_CANDS) if (cons["date_min"] or cons["date_max"]) else None
-    t_idx = _find_col(header, TN_COL_CANDS)   if (cons["tn"] is not None) else None
+    d_idx = _find_col(header, DATE_COL_CANDS, context) if (cons["date_min"] or cons["date_max"]) else None
+    t_idx = _find_col(header, TN_COL_CANDS, context)   if (cons["tn"] is not None) else None
 
     if (cons["date_min"] or cons["date_max"]) and d_idx is None:
-        return
+        return []
     if cons["tn"] is not None and t_idx is None:
-        return
+        return []
 
     dmin = cons["date_min"] or date.min
     dmax = cons["date_max"] or date.max
 
-    for row in rows_iter:
-        ok = True
-        if (cons["date_min"] or cons["date_max"]):
-            raw = row[d_idx] if d_idx is not None and d_idx < len(row) else ""
-            parsed = _parse_any_date(raw)
-            if not parsed:
-                ok = False
-            else:
-                ok = (dmin <= parsed <= dmax)
+    def _iter() -> Generator[List[str], None, None]:
+        for row in rows_iter:
+            ok = True
+            if (cons["date_min"] or cons["date_max"]):
+                raw = row[d_idx] if d_idx is not None and d_idx < len(row) else ""
+                parsed = _parse_any_date(raw)
+                if not parsed:
+                    ok = False
+                else:
+                    ok = (dmin <= parsed <= dmax)
 
-        if ok and cons["tn"] is not None:
-            present = _has_value(row[t_idx] if t_idx is not None and t_idx < len(row) else "")
-            ok = ok and (present == cons["tn"])
+            if ok and cons["tn"] is not None:
+                present = _has_value(row[t_idx] if t_idx is not None and t_idx < len(row) else "")
+                ok = ok and (present == cons["tn"])
 
-        if ok:
-            yield row
+            if ok:
+                yield row
+
+    return _iter()

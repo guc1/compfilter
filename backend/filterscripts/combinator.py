@@ -6,6 +6,7 @@ from typing import Dict, List, Generator, Iterable, Tuple, Optional, Set, Any, U
 
 from ..config import CSV_PATH, CSV_DELIMITER, CSV_ENCODING
 from ..analysis import perform_analysis
+from .runtime import FilterContext
 
 # Import every filter module here
 from . import (
@@ -82,21 +83,13 @@ def _collect_streamed_filter_options(csv_path: Path) -> Dict[str, List[str]]:
     with resolved.open("r", encoding=CSV_ENCODING, newline="") as handle:
         reader = csv.reader(handle, delimiter=CSV_DELIMITER)
         header = next(reader, [])
-        normalized_header = [_normalize_column_name(col) for col in header]
-        index_map = {name: pos for pos, name in enumerate(normalized_header)}
+        context = FilterContext.from_header(header)
 
         trackers: Dict[str, Dict[str, Any]] = {}
         results: Dict[str, List[str]] = {}
 
         for key, spec in active_specs.items():
-            columns = [
-                _normalize_column_name(col) for col in spec.get("columns", [])
-            ]
-            idx: Optional[int] = None
-            for cand in columns:
-                if cand in index_map:
-                    idx = index_map[cand]
-                    break
+            idx = context.index_for_candidates(spec.get("columns", []))
             if idx is None:
                 results[key] = []
             else:
@@ -195,17 +188,14 @@ _FILTER_OPTIONS_CACHE: Dict[Tuple[str, Tuple[str, int, int]], Dict[str, List[str
 _KVK_CANDIDATES = {"kvk", "kvknummer", "kvknr", "kvknumber"}
 
 
-def _normalize_column_name(name: str) -> str:
-    if name is None:
-        return ""
-    return re.sub(r"[^a-z0-9]", "", str(name).lstrip("\ufeff").lower())
-
-
-def _find_kvk_index(header: List[str]) -> Optional[int]:
-    for idx, col in enumerate(header):
-        normalized = _normalize_column_name(col)
-        if normalized in _KVK_CANDIDATES or normalized.startswith("kvk"):
+def _find_kvk_index(header: List[str], context: Optional[FilterContext] = None) -> Optional[int]:
+    ctx = context or FilterContext.from_header(header)
+    for name, idx in ctx.index_map.items():
+        if name in _KVK_CANDIDATES or name.startswith("kvk"):
             return idx
+    for pos, name in enumerate(ctx.normalized_header):
+        if name in _KVK_CANDIDATES or name.startswith("kvk"):
+            return pos
     return None
 
 
@@ -302,12 +292,13 @@ def _apply_duplicate_filter(
     rows: Iterable[List[str]],
     header: List[str],
     folder: str,
+    context: FilterContext,
 ) -> Iterable[List[str]]:
     folder_str = str(folder or "").strip()
     if not folder_str:
         raise ValueError("Provide a folder path to filter duplicates.")
     folder_path = Path(folder_str)
-    kvk_idx = _find_kvk_index(header)
+    kvk_idx = _find_kvk_index(header, context)
     if kvk_idx is None:
         raise ValueError("Could not find a KVK column in the source CSV.")
     existing = _load_existing_kvk_numbers(folder_path)
@@ -364,11 +355,15 @@ def _apply_filters(
     selected_filters: Dict[str, List[str]],
     advanced: Optional[Dict[str, object]] = None,
 ) -> Iterable[List[str]]:
+    context = FilterContext.from_header(header)
     filtered: Iterable[List[str]] = rows
     for k, selected in selected_filters.items():
         mod = FILTERS.get(k)
         if mod:
-            filtered = mod.apply(filtered, header, selected)
+            if hasattr(mod, "apply_with_context"):
+                filtered = mod.apply_with_context(filtered, header, selected, context)
+            else:
+                filtered = mod.apply(filtered, header, selected)
 
     adv = advanced or {}
     filter_duplicates = (
@@ -386,7 +381,7 @@ def _apply_filters(
             or adv.get("folder_path")
             or adv.get("folder")
         )
-        filtered = _apply_duplicate_filter(filtered, header, folder)
+        filtered = _apply_duplicate_filter(filtered, header, folder, context)
     return filtered
 
 
@@ -407,20 +402,22 @@ def stream_filtered_csv(
     """Yield properly quoted CSV lines with CRLF line endings and a UTF-8 BOM."""
     import io
     header, rows = _stream_rows(CSV_PATH)
+    buffer = io.StringIO()
+    writer = csv.writer(
+        buffer,
+        delimiter=CSV_DELIMITER,
+        quotechar='"',
+        lineterminator="\r\n",
+        quoting=csv.QUOTE_MINIMAL,
+        doublequote=True,
+        escapechar=None,
+    )
 
     def writer_line(row: List[str]) -> str:
-        buf = io.StringIO()
-        w = csv.writer(
-            buf,
-            delimiter=CSV_DELIMITER,
-            quotechar='"',
-            lineterminator="\r\n",
-            quoting=csv.QUOTE_MINIMAL,
-            doublequote=True,
-            escapechar=None,
-        )
-        w.writerow(row)
-        return buf.getvalue()
+        buffer.seek(0)
+        buffer.truncate(0)
+        writer.writerow(row)
+        return buffer.getvalue()
 
     # BOM
     yield "\ufeff"
