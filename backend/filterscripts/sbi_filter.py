@@ -9,6 +9,8 @@ import re
 from pathlib import Path
 from typing import Dict, Generator, Iterable, List, Optional, Set, Tuple, Union
 
+from .runtime import FilterContext
+
 FILTER_KEY = "sbi"
 
 MAIN_COL_CANDS = ["mainsbi", "main_sbi", "hoofd_sbi", "hoofdactiviteit"]
@@ -127,7 +129,13 @@ def _load_codes_from_file(bucket: str, stem: str) -> Set[str]:
     return codes
 
 
-def _find_col(header: List[str], candidates: List[str]) -> Optional[int]:
+def _find_col(
+    header: List[str],
+    candidates: List[str],
+    context: Optional[FilterContext] = None,
+) -> Optional[int]:
+    if context is not None:
+        return context.index_for_candidates(candidates)
     lowered = [h.strip().lower() for h in header]
     for cand in candidates:
         c = cand.strip().lower()
@@ -177,7 +185,21 @@ def _normalize_selection(selected: Union[Dict[str, object], List[str], None]) ->
     return result
 
 
-def apply(rows_iter: Iterable[List[str]], header: List[str], selected_values: Union[Dict[str, object], List[str], None]) -> Generator[List[str], None, None]:
+def apply(
+    rows_iter: Iterable[List[str]],
+    header: List[str],
+    selected_values: Union[Dict[str, object], List[str], None],
+) -> Generator[List[str], None, None]:
+    context = FilterContext.from_header(header)
+    yield from apply_with_context(rows_iter, header, selected_values, context)
+
+
+def apply_with_context(
+    rows_iter: Iterable[List[str]],
+    header: List[str],
+    selected_values: Union[Dict[str, object], List[str], None],
+    context: FilterContext,
+) -> Iterable[List[str]]:
     normalized = _normalize_selection(selected_values)
 
     active_buckets = {
@@ -188,30 +210,31 @@ def apply(rows_iter: Iterable[List[str]], header: List[str], selected_values: Un
         for bucket in BUCKETS
     }
 
-    # Load codes from referenced files
     for bucket, data in active_buckets.items():
         file_label = data["file"]
         if file_label:
             data["codes"].update(_load_codes_from_file(bucket, file_label))
 
     if all(len(data["codes"]) == 0 for data in active_buckets.values()):
-        yield from rows_iter
-        return
+        return rows_iter
 
-    idx_main = _find_col(header, MAIN_COL_CANDS) if active_buckets["main"]["codes"] else None
-    idx_sub = _find_col(header, SUB_COL_CANDS) if active_buckets["sub"]["codes"] else None
-    idx_all = _find_col(header, ALL_COL_CANDS) if active_buckets["all"]["codes"] else None
+    idx_main = _find_col(header, MAIN_COL_CANDS, context) if active_buckets["main"]["codes"] else None
+    idx_sub = _find_col(header, SUB_COL_CANDS, context) if active_buckets["sub"]["codes"] else None
+    idx_all = _find_col(header, ALL_COL_CANDS, context) if active_buckets["all"]["codes"] else None
 
-    for row in rows_iter:
-        ok = True
-        if idx_main is not None:
-            values = _parse_row_codes(row[idx_main] if idx_main < len(row) else "")
-            ok = bool(values & active_buckets["main"]["codes"])
-        if ok and idx_sub is not None:
-            values = _parse_row_codes(row[idx_sub] if idx_sub < len(row) else "")
-            ok = bool(values & active_buckets["sub"]["codes"])
-        if ok and idx_all is not None:
-            values = _parse_row_codes(row[idx_all] if idx_all < len(row) else "")
-            ok = bool(values & active_buckets["all"]["codes"])
-        if ok:
-            yield row
+    def _iter() -> Generator[List[str], None, None]:
+        for row in rows_iter:
+            ok = True
+            if idx_main is not None:
+                values = _parse_row_codes(row[idx_main] if idx_main < len(row) else "")
+                ok = bool(values & active_buckets["main"]["codes"])
+            if ok and idx_sub is not None:
+                values = _parse_row_codes(row[idx_sub] if idx_sub < len(row) else "")
+                ok = bool(values & active_buckets["sub"]["codes"])
+            if ok and idx_all is not None:
+                values = _parse_row_codes(row[idx_all] if idx_all < len(row) else "")
+                ok = bool(values & active_buckets["all"]["codes"])
+            if ok:
+                yield row
+
+    return _iter()

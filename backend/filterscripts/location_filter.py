@@ -18,6 +18,8 @@ from typing import Iterable, List, Generator, Optional, Dict, Tuple
 from shapely.geometry import shape, Point
 from shapely.strtree import STRtree
 
+from .runtime import FilterContext
+
 FILTER_KEY = "location"
 DATA_DIR   = Path(__file__).with_name("data")
 PROV_FILE  = DATA_DIR / "provincies_wgs84.geojson"
@@ -141,7 +143,13 @@ def distinct_values(*_args, **_kw) -> List[str]:
         _log(f"distinct_values error: {e}")
         return []
 
-def _find_idx(header: List[str], cands: List[str]) -> Optional[int]:
+def _find_idx(
+    header: List[str],
+    cands: List[str],
+    context: Optional[FilterContext] = None,
+) -> Optional[int]:
+    if context is not None:
+        return context.index_for_candidates(cands)
     norm = [h.strip().lower() for h in header]
     for c in cands:
         if c in norm:
@@ -157,51 +165,62 @@ def _collect_targets(selected: List[str]) -> List:
     return [name_to_geom[s] for s in selected if s in name_to_geom]
 
 def apply(rows_iter: Iterable[List[str]], header: List[str], selected_values: List[str]) -> Generator[List[str], None, None]:
+    context = FilterContext.from_header(header)
+    yield from apply_with_context(rows_iter, header, selected_values, context)
+
+
+def apply_with_context(
+    rows_iter: Iterable[List[str]],
+    header: List[str],
+    selected_values: List[str],
+    context: FilterContext,
+) -> Iterable[List[str]]:
     """Stream rows; yield only if point-in-selected-polygons."""
     if not selected_values:
-        yield from rows_iter
-        return
+        return rows_iter
 
     try:
         _load_all()
     except Exception as e:
         _log(f"apply load error: {e}")
-        return
+        return []
 
-    lon_i = _find_idx(header, LON_CANDS)
-    lat_i = _find_idx(header, LAT_CANDS)
+    lon_i = _find_idx(header, LON_CANDS, context)
+    lat_i = _find_idx(header, LAT_CANDS, context)
     if lon_i is None or lat_i is None:
         _log("missing latitude/longitude columns; skipping filter")
-        return
+        return []
 
     targets = _collect_targets(selected_values)
     if not targets:
         _log(f"no geometries matched selected values: {selected_values}")
-        return
+        return []
 
-    # Small set -> build STRtree per request for simplicity
     tree = STRtree(targets)
 
-    for row in rows_iter:
-        try:
-            lon = float(row[lon_i]); lat = float(row[lat_i])
-        except Exception:
-            continue
-        pt = Point(lon, lat)
-        try:
-            idxs = tree.query(pt)      # indices in 'targets'
-            geoms = tree.geometries
-            for i in idxs:
-                poly = geoms[int(i)]
-                if poly.intersects(pt):
-                    yield row
-                    break
-        except Exception:
-            # Be resilient: if STRtree misbehaves, fall back to linear scan
-            for poly in targets:
-                try:
+    def _iter() -> Generator[List[str], None, None]:
+        for row in rows_iter:
+            try:
+                lon = float(row[lon_i])
+                lat = float(row[lat_i])
+            except Exception:
+                continue
+            pt = Point(lon, lat)
+            try:
+                idxs = tree.query(pt)
+                geoms = tree.geometries
+                for i in idxs:
+                    poly = geoms[int(i)]
                     if poly.intersects(pt):
                         yield row
                         break
-                except Exception:
-                    continue
+            except Exception:
+                for poly in targets:
+                    try:
+                        if poly.intersects(pt):
+                            yield row
+                            break
+                    except Exception:
+                        continue
+
+    return _iter()

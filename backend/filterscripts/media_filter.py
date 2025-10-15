@@ -7,6 +7,8 @@ Channels: email, facebook, instagram, linkedin, pinterest, twitter, youtube, int
 import ast
 from typing import Iterable, List, Generator, Optional, Dict
 
+from .runtime import FilterContext
+
 FILTER_KEY = "media"
 
 CHANNELS = ["email", "facebook", "instagram", "linkedin", "pinterest", "twitter", "youtube", "internetaddress"]
@@ -23,14 +25,23 @@ COL_CANDIDATES: Dict[str, List[str]] = {
     "internetaddress":  ["internetaddress", "website", "url", "site", "homepage", "web", "internet_adres"],
 }
 
+
 def name() -> str:
     return FILTER_KEY
+
 
 def distinct_values(*_a, **_k) -> List[str]:
     # fixed list used to render checkboxes
     return CHANNELS
 
-def _find_col(header: List[str], candidates: List[str]) -> Optional[int]:
+
+def _find_col(
+    header: List[str],
+    candidates: List[str],
+    context: Optional[FilterContext] = None,
+) -> Optional[int]:
+    if context is not None:
+        return context.index_for_candidates(candidates)
     norm = [h.strip().lower() for h in header]
     for c in candidates:
         c2 = c.strip().lower()
@@ -56,30 +67,41 @@ def _has_value(cell: Optional[str]) -> bool:
         return True
 
 def apply(rows_iter: Iterable[List[str]], header: List[str], selected_values: List[str]) -> Generator[List[str], None, None]:
-    """
-    Keep rows where ALL selected media channels are present (AND).
-    Empty selection => passthrough.
-    """
-    selected = [v.strip().lower() for v in (selected_values or []) if isinstance(v, str) and v.strip()]
-    if not selected:
-        yield from rows_iter
-        return
+    context = FilterContext.from_header(header)
+    yield from apply_with_context(rows_iter, header, selected_values, context)
 
-    # Resolve column index per selected channel
+
+def apply_with_context(
+    rows_iter: Iterable[List[str]],
+    header: List[str],
+    selected_values: List[str],
+    context: FilterContext,
+) -> Iterable[List[str]]:
+    """Keep rows where ALL selected media channels are present (AND)."""
+    selected = [
+        v.strip().lower()
+        for v in (selected_values or [])
+        if isinstance(v, str) and v.strip()
+    ]
+    if not selected:
+        return rows_iter
+
     idx_map: Dict[str, Optional[int]] = {}
     for ch in selected:
-        idx_map[ch] = _find_col(header, COL_CANDIDATES.get(ch, [ch]))
+        idx_map[ch] = _find_col(header, COL_CANDIDATES.get(ch, [ch]), context)
 
-    # If any selected channel has no matching column, then no row can match
     if any(idx is None for idx in idx_map.values()):
-        return
+        return []
 
-    for row in rows_iter:
-        ok = True
-        for ch, idx in idx_map.items():
-            cell = row[idx] if idx < len(row) else ""
-            if not _has_value(cell):
-                ok = False
-                break
-        if ok:
-            yield row
+    def _iter() -> Generator[List[str], None, None]:
+        for row in rows_iter:
+            ok = True
+            for ch, idx in idx_map.items():
+                cell = row[idx] if idx is not None and idx < len(row) else ""
+                if not _has_value(cell):
+                    ok = False
+                    break
+            if ok:
+                yield row
+
+    return _iter()

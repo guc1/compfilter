@@ -1,19 +1,9 @@
-"""Filter logic for 'traditional_outreach' over faxnumber_formatted, phonenumber_formatted,
-and specialpostadress (postaladdress) presence.
-
-Options exposed as checkboxes:
-  - fax=TRUE, fax=FALSE
-  - phone=TRUE, phone=FALSE
-  - post=TRUE, post=FALSE
-
-Rules:
-- Build constraints from selected options; constraints are ANDed.
-- If both TRUE and FALSE are selected for the same field, that field is ignored (no constraint).
-- Presence means the column exists and is non-empty (handles stringified lists too).
-"""
+"""Filter logic for 'traditional_outreach' over communication channel presence."""
 
 import ast
 from typing import Iterable, List, Generator, Optional, Dict
+
+from .runtime import FilterContext
 
 FILTER_KEY = "traditional_outreach"
 
@@ -28,13 +18,22 @@ OPTIONS = [
     "post=TRUE", "post=FALSE",
 ]
 
+
 def name() -> str:
     return FILTER_KEY
+
 
 def distinct_values(*_a, **_k) -> List[str]:
     return OPTIONS
 
-def _find_col(header: List[str], candidates: List[str]) -> Optional[int]:
+
+def _find_col(
+    header: List[str],
+    candidates: List[str],
+    context: Optional[FilterContext] = None,
+) -> Optional[int]:
+    if context is not None:
+        return context.index_for_candidates(candidates)
     norm = [h.strip().lower() for h in header]
     for c in candidates:
         c2 = c.strip().lower()
@@ -86,32 +85,42 @@ def _parse_constraints(selected_values: List[str]) -> Dict[str, Optional[bool]]:
     return out
 
 def apply(rows_iter: Iterable[List[str]], header: List[str], selected_values: List[str]) -> Generator[List[str], None, None]:
+    context = FilterContext.from_header(header)
+    yield from apply_with_context(rows_iter, header, selected_values, context)
+
+
+def apply_with_context(
+    rows_iter: Iterable[List[str]],
+    header: List[str],
+    selected_values: List[str],
+    context: FilterContext,
+) -> Iterable[List[str]]:
     cons = _parse_constraints(selected_values)
-    # If all fields have None (no constraints at all), pass-through
     if all(cons[k] is None for k in ("fax", "phone", "post")):
-        yield from rows_iter
-        return
+        return rows_iter
 
-    fax_idx   = _find_col(header, FAX_COL_CANDS)   if cons["fax"]  is not None else None
-    phone_idx = _find_col(header, PHONE_COL_CANDS) if cons["phone"] is not None else None
-    post_idx  = _find_col(header, POSTAL_COL_CANDS)if cons["post"] is not None else None
+    fax_idx = _find_col(header, FAX_COL_CANDS, context) if cons["fax"] is not None else None
+    phone_idx = _find_col(header, PHONE_COL_CANDS, context) if cons["phone"] is not None else None
+    post_idx = _find_col(header, POSTAL_COL_CANDS, context) if cons["post"] is not None else None
 
-    # If a constraint is required but the column is missing -> no rows can match
-    if (cons["fax"]  is not None and fax_idx  is None) or \
-       (cons["phone"]is not None and phone_idx is None) or \
-       (cons["post"] is not None and post_idx  is None):
-        return
+    if (cons["fax"] is not None and fax_idx is None) or \
+       (cons["phone"] is not None and phone_idx is None) or \
+       (cons["post"] is not None and post_idx is None):
+        return []
 
-    for row in rows_iter:
-        ok = True
-        if cons["fax"] is not None:
-            present = _has_value(row[fax_idx] if fax_idx is not None and fax_idx < len(row) else "")
-            ok = ok and (present == cons["fax"])
-        if ok and cons["phone"] is not None:
-            present = _has_value(row[phone_idx] if phone_idx is not None and phone_idx < len(row) else "")
-            ok = ok and (present == cons["phone"])
-        if ok and cons["post"] is not None:
-            present = _has_value(row[post_idx] if post_idx is not None and post_idx < len(row) else "")
-            ok = ok and (present == cons["post"])
-        if ok:
-            yield row
+    def _iter() -> Generator[List[str], None, None]:
+        for row in rows_iter:
+            ok = True
+            if cons["fax"] is not None:
+                present = _has_value(row[fax_idx] if fax_idx is not None and fax_idx < len(row) else "")
+                ok = ok and (present == cons["fax"])
+            if ok and cons["phone"] is not None:
+                present = _has_value(row[phone_idx] if phone_idx is not None and phone_idx < len(row) else "")
+                ok = ok and (present == cons["phone"])
+            if ok and cons["post"] is not None:
+                present = _has_value(row[post_idx] if post_idx is not None and post_idx < len(row) else "")
+                ok = ok and (present == cons["post"])
+            if ok:
+                yield row
+
+    return _iter()
