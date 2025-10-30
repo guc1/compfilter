@@ -20,6 +20,119 @@
       </div>
     </header>
 
+    <section id="homeScreen" class="card glass home-screen">
+      <div class="card-header">
+        <div>
+          <h2 class="h2">Choose your workspace</h2>
+          <p class="card-subtitle">Jump into the classic filter view or manage subscription lists in a few clicks.</p>
+        </div>
+      </div>
+      <div class="home-screen-buttons">
+        <button id="homeFilterBtn" class="btn primary home-btn" type="button">THEFILTER</button>
+        <button id="homeUnsubscribeBtn" class="btn secondary home-btn" type="button">UNSUBSCRIBE</button>
+        <button id="homeSubscribeBtn" class="btn secondary home-btn" type="button">SUBSCIRBE</button>
+      </div>
+    </section>
+
+    <section id="unsubscribeView" class="card glass subscription-view hidden" aria-labelledby="unsubscribeTitle">
+      <div class="card-header">
+        <div>
+          <h2 id="unsubscribeTitle" class="h2">Unsubscribe workspace</h2>
+          <p class="card-subtitle">Manage opt-out lists, locate campaign appearances, and keep outreach clean.</p>
+        </div>
+        <button class="btn ghost" type="button" data-nav-target="home">← Back</button>
+      </div>
+      <div class="subscription-grid">
+        <div class="subscription-card">
+          <button class="btn secondary subscription-action" type="button" data-action="setCsv" data-mode="unsubscribe">CSVlinkun</button>
+          <div id="unsubscribeCsvPath" class="subscription-path muted">No CSV selected.</div>
+        </div>
+        <div class="subscription-card">
+          <button class="btn secondary subscription-action" type="button" data-action="setCampaigns" data-mode="unsubscribe">LINKTOCAMPAIGSN</button>
+          <div id="unsubscribeCampaignPath" class="subscription-path muted">No folder selected.</div>
+        </div>
+        <div class="subscription-card">
+          <button class="btn secondary subscription-action" type="button" data-action="count" data-mode="unsubscribe">count</button>
+          <div id="unsubscribeCount" class="subscription-result muted">Waiting for count.</div>
+        </div>
+        <div class="subscription-card subscription-card-wide">
+          <div class="subscription-card-header">
+            <button class="btn secondary subscription-action" type="button" data-action="toggleAdd" data-mode="unsubscribe">ADDcompanynames</button>
+            <button class="btn ghost small subscription-clear" type="button" data-action="clearAdd" data-mode="unsubscribe">Clear</button>
+          </div>
+          <textarea id="unsubscribeEmailsInput" class="subscription-textarea" placeholder="Enter one email per line or separate with commas"></textarea>
+          <button class="btn primary subscription-action" type="button" data-action="add" data-mode="unsubscribe">Add</button>
+        </div>
+        <div class="subscription-card">
+          <label class="label" for="unsubscribeLookup">Email to inspect</label>
+          <input id="unsubscribeLookup" class="subscription-input" type="text" placeholder="name@example.com" autocomplete="off" />
+          <div class="subscription-row-actions">
+            <button class="btn secondary subscription-action" type="button" data-action="partOf" data-mode="unsubscribe">PARTOFCAMPAIGN</button>
+            <button class="btn secondary subscription-action" type="button" data-action="remove" data-mode="unsubscribe">DELETEFROMCAMPAIGNS</button>
+          </div>
+        </div>
+        <div class="subscription-card">
+          <div class="subscription-row-actions">
+            <button class="btn ghost subscription-action" type="button" data-action="savePreset" data-mode="unsubscribe">Save preset</button>
+            <button class="btn ghost subscription-action" type="button" data-action="loadPreset" data-mode="unsubscribe">Load preset</button>
+            <input id="unsubscribePresetInput" type="file" accept="application/json" style="display:none" />
+          </div>
+          <div id="unsubscribeStatus" class="subscription-status muted"></div>
+        </div>
+      </div>
+      <div id="unsubscribeResults" class="subscription-results muted">Results will appear here.</div>
+    </section>
+
+    <section id="subscribeView" class="card glass subscription-view hidden" aria-labelledby="subscribeTitle">
+      <div class="card-header">
+        <div>
+          <h2 id="subscribeTitle" class="h2">Subscribe workspace</h2>
+          <p class="card-subtitle">Mirror the unsubscribe tools for opt-in management.</p>
+        </div>
+        <button class="btn ghost" type="button" data-nav-target="home">← Back</button>
+      </div>
+      <div class="subscription-grid">
+        <div class="subscription-card">
+          <button class="btn secondary subscription-action" type="button" data-action="setCsv" data-mode="subscribe">CSVlinkun</button>
+          <div id="subscribeCsvPath" class="subscription-path muted">No CSV selected.</div>
+        </div>
+        <div class="subscription-card">
+          <button class="btn secondary subscription-action" type="button" data-action="setCampaigns" data-mode="subscribe">LINKTOCAMPAIGSN</button>
+          <div id="subscribeCampaignPath" class="subscription-path muted">No folder selected.</div>
+        </div>
+        <div class="subscription-card">
+          <button class="btn secondary subscription-action" type="button" data-action="count" data-mode="subscribe">count</button>
+          <div id="subscribeCount" class="subscription-result muted">Waiting for count.</div>
+        </div>
+        <div class="subscription-card subscription-card-wide">
+          <div class="subscription-card-header">
+            <button class="btn secondary subscription-action" type="button" data-action="toggleAdd" data-mode="subscribe">ADDcompanynames</button>
+            <button class="btn ghost small subscription-clear" type="button" data-action="clearAdd" data-mode="subscribe">Clear</button>
+          </div>
+          <textarea id="subscribeEmailsInput" class="subscription-textarea" placeholder="Enter one email per line or separate with commas"></textarea>
+          <button class="btn primary subscription-action" type="button" data-action="add" data-mode="subscribe">Add</button>
+        </div>
+        <div class="subscription-card">
+          <label class="label" for="subscribeLookup">Email to inspect</label>
+          <input id="subscribeLookup" class="subscription-input" type="text" placeholder="name@example.com" autocomplete="off" />
+          <div class="subscription-row-actions">
+            <button class="btn secondary subscription-action" type="button" data-action="partOf" data-mode="subscribe">PARTOFCAMPAIGN</button>
+            <button class="btn secondary subscription-action" type="button" data-action="remove" data-mode="subscribe">REMOVEFROMCAMPAIGNS</button>
+          </div>
+        </div>
+        <div class="subscription-card">
+          <div class="subscription-row-actions">
+            <button class="btn ghost subscription-action" type="button" data-action="savePreset" data-mode="subscribe">Save preset</button>
+            <button class="btn ghost subscription-action" type="button" data-action="loadPreset" data-mode="subscribe">Load preset</button>
+            <input id="subscribePresetInput" type="file" accept="application/json" style="display:none" />
+          </div>
+          <div id="subscribeStatus" class="subscription-status muted"></div>
+        </div>
+      </div>
+      <div id="subscribeResults" class="subscription-results muted">Results will appear here.</div>
+    </section>
+
+    <div id="filterView" class="filter-view hidden">
     <section id="dashboard" class="card glass">
       <div class="card-header">
         <div>
@@ -205,6 +318,7 @@
         </div>
       </div>
     </div>
+    </div>
   </div>
 
   <!-- Try external script first -->
@@ -217,6 +331,23 @@
 
     const $ = (sel) => document.querySelector(sel);
     const API = (path) => `${location.origin}${path}`;
+
+    const fallbackFilterView = document.getElementById("filterView");
+    if(fallbackFilterView){
+      fallbackFilterView.classList.remove("hidden");
+    }
+    const fallbackHome = document.getElementById("homeScreen");
+    if(fallbackHome){
+      fallbackHome.classList.add("hidden");
+    }
+    const fallbackUnsub = document.getElementById("unsubscribeView");
+    if(fallbackUnsub){
+      fallbackUnsub.classList.add("hidden");
+    }
+    const fallbackSub = document.getElementById("subscribeView");
+    if(fallbackSub){
+      fallbackSub.classList.add("hidden");
+    }
 
     let FILTERS_META = [];
     let FILTER_OPTIONS = {};
