@@ -25,6 +25,28 @@ let REMINDER_ENABLED = false;
 let REMINDER_STATE = {};
 let REMINDER_CYCLE_STARTED = false;
 
+const APP_VIEWS = {
+  home: "homeScreen",
+  filter: "filterView",
+  unsubscribe: "unsubscribeView",
+  subscribe: "subscribeView",
+};
+
+let CURRENT_VIEW = "home";
+let FILTERS_INITIALISED = false;
+
+function createSubscriptionState(){
+  return {
+    csvPath: "",
+    campaignsPath: "",
+  };
+}
+
+const SUBSCRIPTION_STATE = {
+  unsubscribe: createSubscriptionState(),
+  subscribe: createSubscriptionState(),
+};
+
 function initReminderState(){
   REMINDER_STATE = {};
   REMINDER_STEPS.forEach(({ key }) => {
@@ -46,6 +68,74 @@ function escapeHtml(value){
       default: return ch;
     }
   });
+}
+
+function ensureSubscriptionState(mode){
+  if(!SUBSCRIPTION_STATE[mode]){
+    SUBSCRIPTION_STATE[mode] = createSubscriptionState();
+  }
+  return SUBSCRIPTION_STATE[mode];
+}
+
+function setView(view){
+  if(!APP_VIEWS[view]) return;
+  Object.entries(APP_VIEWS).forEach(([key, id]) => {
+    const section = document.getElementById(id);
+    if(!section) return;
+    if(key === view){
+      section.classList.remove("hidden");
+    } else {
+      section.classList.add("hidden");
+    }
+  });
+  CURRENT_VIEW = view;
+  if(view === "filter"){
+    activateFilterView();
+  }
+}
+
+async function activateFilterView(){
+  if(FILTERS_INITIALISED) return;
+  const dashboard = document.getElementById("dashboard");
+  if(dashboard){
+    dashboard.classList.add("loading");
+  }
+  const loaded = await loadFilters();
+  FILTERS_INITIALISED = loaded;
+  if(!loaded){
+    const summary = document.getElementById("activeSummary");
+    if(summary){
+      const message = LAST_FILTER_LOAD_ERROR || "Filters could not be loaded.";
+      summary.innerHTML = `<div class="muted status-error">${escapeHtml(message)}</div>`;
+    }
+  }
+  if(dashboard){
+    dashboard.classList.remove("loading");
+  }
+}
+
+function updateSubscriptionPathDisplay(mode){
+  const state = ensureSubscriptionState(mode);
+  const csvEl = document.getElementById(`${mode}CsvPath`);
+  if(csvEl){
+    if(state.csvPath){
+      csvEl.textContent = state.csvPath;
+      csvEl.classList.remove("muted");
+    } else {
+      csvEl.textContent = "No CSV selected.";
+      csvEl.classList.add("muted");
+    }
+  }
+  const folderEl = document.getElementById(`${mode}CampaignPath`);
+  if(folderEl){
+    if(state.campaignsPath){
+      folderEl.textContent = state.campaignsPath;
+      folderEl.classList.remove("muted");
+    } else {
+      folderEl.textContent = "No folder selected.";
+      folderEl.classList.add("muted");
+    }
+  }
 }
 
 function setFilterActionsEnabled(enabled){
@@ -2700,9 +2790,411 @@ async function removeCustomArea(label){
   }
 }
 
+function getSubscriptionLookupValue(mode){
+  const input = document.getElementById(`${mode}Lookup`);
+  return input ? input.value.trim() : "";
+}
+
+function setSubscriptionStatus(mode, message, isError = false){
+  const statusEl = document.getElementById(`${mode}Status`);
+  if(!statusEl) return;
+  const text = message || "";
+  statusEl.textContent = text;
+  statusEl.classList.toggle("status-error", Boolean(isError));
+  if(text){
+    statusEl.classList.remove("muted");
+  } else {
+    statusEl.classList.add("muted");
+  }
+}
+
+function setSubscriptionCount(mode, message){
+  const countEl = document.getElementById(`${mode}Count`);
+  if(!countEl) return;
+  const text = message || "";
+  countEl.textContent = text;
+  if(text){
+    countEl.classList.remove("muted");
+  } else {
+    countEl.classList.add("muted");
+  }
+}
+
+function renderSubscriptionResults(mode, results, isDeletion = false, emptyMessage){
+  const host = document.getElementById(`${mode}Results`);
+  if(!host) return;
+  if(!Array.isArray(results) || results.length === 0){
+    const fallback = emptyMessage || (isDeletion ? "No matching campaigns were updated." : "No matches found.");
+    host.textContent = fallback;
+    host.classList.add("muted");
+    return;
+  }
+  const items = results.map((item) => {
+    const row = item && typeof item.row === "number" ? item.row : (item && typeof item.rowNumber === "number" ? item.rowNumber : (item && typeof item.line === "number" ? item.line : "?"));
+    const file = escapeHtml(item && item.file ? item.file : (item && item.path ? item.path : ""));
+    const value = escapeHtml(item && item.value ? item.value : (item && item.match ? item.match : ""));
+    return `
+      <div class="result-item">
+        <div class="result-meta">
+          <div><strong>Row ${row}</strong></div>
+          <div class="result-path">${file || "(unknown file)"}</div>
+          <div class="result-value">${value || ""}</div>
+        </div>
+      </div>
+    `;
+  }).join("\n");
+  host.innerHTML = items;
+  host.classList.remove("muted");
+}
+
+function parseEmailList(raw){
+  if(!raw) return [];
+  return raw
+    .split(/[\s,;]+/)
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0);
+}
+
+async function subscriptionApi(path, payload){
+  const res = await fetch(API(path), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  let data = {};
+  try{
+    data = await res.json();
+  }catch(_err){
+    data = {};
+  }
+  if(!res.ok || (data && data.ok === false)){
+    const message = data && data.error ? data.error : (res.statusText || "Request failed");
+    throw new Error(message);
+  }
+  return data;
+}
+
+function highlightSubscriptionInput(el){
+  if(!el) return;
+  el.classList.add("subscription-highlight");
+  window.setTimeout(() => {
+    el.classList.remove("subscription-highlight");
+  }, 600);
+}
+
+function defaultSubscriptionPresetName(mode){
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${mode}_preset_${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}`;
+}
+
+function buildSubscriptionPreset(mode){
+  const state = ensureSubscriptionState(mode);
+  const textarea = document.getElementById(`${mode}EmailsInput`);
+  const lookupEl = document.getElementById(`${mode}Lookup`);
+  return {
+    mode,
+    csvPath: state.csvPath || "",
+    campaignsPath: state.campaignsPath || "",
+    emails: textarea ? textarea.value : "",
+    lookup: lookupEl ? lookupEl.value : "",
+  };
+}
+
+function sanitizePresetFilename(input, fallback){
+  let name = (input || "").trim();
+  if(!name){
+    name = fallback;
+  }
+  name = name.replace(/[\\/]/g, "_");
+  name = name.replace(/[^A-Za-z0-9._-]/g, "_");
+  if(!name.toLowerCase().endsWith(".json")){
+    name += ".json";
+  }
+  return name;
+}
+
+function downloadSubscriptionPreset(mode){
+  const preset = buildSubscriptionPreset(mode);
+  const defaultName = defaultSubscriptionPresetName(mode);
+  const suggested = sanitizePresetFilename(defaultName, defaultName);
+  const input = window.prompt("Enter a name for this preset:", suggested);
+  if(input === null){
+    return;
+  }
+  const filename = sanitizePresetFilename(input || suggested, suggested);
+  const blob = new Blob([JSON.stringify(preset, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+  setSubscriptionStatus(mode, `Preset saved as ${filename}.`);
+}
+
+function applySubscriptionPreset(mode, payload){
+  const state = ensureSubscriptionState(mode);
+  const csvPath = typeof payload.csvPath === "string" ? payload.csvPath : (typeof payload.csv === "string" ? payload.csv : "");
+  const campaignPath = typeof payload.campaignsPath === "string" ? payload.campaignsPath : (
+    typeof payload.campaigns === "string" ? payload.campaigns : (typeof payload.folder === "string" ? payload.folder : "")
+  );
+  state.csvPath = csvPath || "";
+  state.campaignsPath = campaignPath || "";
+  updateSubscriptionPathDisplay(mode);
+  const textarea = document.getElementById(`${mode}EmailsInput`);
+  if(textarea){
+    textarea.value = typeof payload.emails === "string" ? payload.emails : (typeof payload.addresses === "string" ? payload.addresses : "");
+  }
+  const lookupEl = document.getElementById(`${mode}Lookup`);
+  if(lookupEl){
+    lookupEl.value = typeof payload.lookup === "string" ? payload.lookup : (typeof payload.email === "string" ? payload.email : "");
+  }
+  renderSubscriptionResults(mode, [], false, "Results will appear here.");
+  setSubscriptionStatus(mode, "Preset loaded.");
+}
+
+function handleSubscriptionPresetSelection(ev, mode){
+  const input = ev.target;
+  if(!input || !input.files || !input.files[0]){
+    return;
+  }
+  const file = input.files[0];
+  const reader = new FileReader();
+  reader.onload = () => {
+    try{
+      const text = reader.result || "";
+      const payload = JSON.parse(String(text));
+      applySubscriptionPreset(mode, payload || {});
+      setSubscriptionStatus(mode, `Preset loaded from ${file.name}.`);
+    }catch(err){
+      console.error("Failed to load preset", err);
+      setSubscriptionStatus(mode, "Failed to load preset.", true);
+    }finally{
+      input.value = "";
+    }
+  };
+  reader.onerror = () => {
+    setSubscriptionStatus(mode, "Failed to read preset file.", true);
+    input.value = "";
+  };
+  reader.readAsText(file);
+}
+
+async function subscriptionCount(mode){
+  const state = ensureSubscriptionState(mode);
+  if(!state.csvPath){
+    setSubscriptionStatus(mode, "Set the CSV path first.", true);
+    return;
+  }
+  setSubscriptionStatus(mode, "Counting addresses…");
+  try{
+    const data = await subscriptionApi("/api/subscription/count", { csvPath: state.csvPath });
+    const count = typeof data.count === "number" ? data.count : 0;
+    setSubscriptionCount(mode, `${count.toLocaleString()} addresses`);
+    setSubscriptionStatus(mode, "Count complete.");
+  }catch(err){
+    console.error("Count failed", err);
+    setSubscriptionStatus(mode, err && err.message ? err.message : "Count failed.", true);
+  }
+}
+
+async function subscriptionAdd(mode){
+  const state = ensureSubscriptionState(mode);
+  if(!state.csvPath){
+    setSubscriptionStatus(mode, "Set the CSV path first.", true);
+    return;
+  }
+  const textarea = document.getElementById(`${mode}EmailsInput`);
+  const emails = parseEmailList(textarea ? textarea.value : "");
+  if(emails.length === 0){
+    setSubscriptionStatus(mode, "Add at least one email address.", true);
+    if(textarea) textarea.focus();
+    return;
+  }
+  setSubscriptionStatus(mode, "Adding addresses…");
+  try{
+    const data = await subscriptionApi("/api/subscription/add", { csvPath: state.csvPath, emails });
+    const added = typeof data.added === "number" ? data.added : emails.length;
+    const skipped = typeof data.skipped === "number" ? data.skipped : 0;
+    const count = typeof data.count === "number" ? data.count : null;
+    const parts = [`Added ${added} email${added === 1 ? "" : "s"}.`];
+    if(skipped > 0){
+      parts.push(`${skipped} duplicate${skipped === 1 ? "" : "s"} skipped.`);
+    }
+    if(count !== null){
+      setSubscriptionCount(mode, `${count.toLocaleString()} addresses`);
+    }
+    setSubscriptionStatus(mode, parts.join(" "));
+  }catch(err){
+    console.error("Add failed", err);
+    setSubscriptionStatus(mode, err && err.message ? err.message : "Failed to add emails.", true);
+  }
+}
+
+async function subscriptionSearch(mode, mutate){
+  const state = ensureSubscriptionState(mode);
+  if(!state.campaignsPath){
+    setSubscriptionStatus(mode, "Set the campaigns folder first.", true);
+    return;
+  }
+  const email = getSubscriptionLookupValue(mode);
+  if(!email){
+    setSubscriptionStatus(mode, "Enter an email address to inspect.", true);
+    const input = document.getElementById(`${mode}Lookup`);
+    if(input) input.focus();
+    return;
+  }
+  setSubscriptionStatus(mode, mutate ? "Removing from campaigns…" : "Searching campaigns…");
+  try{
+    const endpoint = mutate ? "/api/subscription/remove" : "/api/subscription/search";
+    const data = await subscriptionApi(endpoint, {
+      campaignsPath: state.campaignsPath,
+      email,
+    });
+    const results = Array.isArray(data.results) ? data.results : [];
+    if(mutate){
+      renderSubscriptionResults(mode, results, true);
+      const message = results.length > 0
+        ? `Removed ${results.length} row${results.length === 1 ? "" : "s"} from campaign files.`
+        : "No matching campaigns were updated.";
+      setSubscriptionStatus(mode, message);
+    } else {
+      renderSubscriptionResults(mode, results, false);
+      const message = results.length > 0
+        ? `Found ${results.length} match${results.length === 1 ? "" : "es"}.`
+        : "No matches found.";
+      setSubscriptionStatus(mode, message);
+    }
+  }catch(err){
+    console.error("Campaign lookup failed", err);
+    setSubscriptionStatus(mode, err && err.message ? err.message : "Campaign lookup failed.", true);
+  }
+}
+
+function handleSubscriptionAction(mode, action){
+  const state = ensureSubscriptionState(mode);
+  switch(action){
+    case "setCsv": {
+      const current = state.csvPath || "";
+      const next = window.prompt("Enter the CSV file path:", current);
+      if(next === null) return;
+      state.csvPath = next.trim();
+      updateSubscriptionPathDisplay(mode);
+      setSubscriptionStatus(mode, state.csvPath ? "CSV path updated." : "CSV path cleared.");
+      break;
+    }
+    case "setCampaigns": {
+      const current = state.campaignsPath || "";
+      const next = window.prompt("Enter the campaigns folder path:", current);
+      if(next === null) return;
+      state.campaignsPath = next.trim();
+      updateSubscriptionPathDisplay(mode);
+      setSubscriptionStatus(mode, state.campaignsPath ? "Campaign folder updated." : "Campaign folder cleared.");
+      break;
+    }
+    case "count":
+      subscriptionCount(mode);
+      break;
+    case "add":
+      subscriptionAdd(mode);
+      break;
+    case "partOf":
+      subscriptionSearch(mode, false);
+      break;
+    case "remove":
+      subscriptionSearch(mode, true);
+      break;
+    case "savePreset":
+      downloadSubscriptionPreset(mode);
+      break;
+    case "loadPreset": {
+      const input = document.getElementById(`${mode}PresetInput`);
+      if(input){
+        input.click();
+      }
+      break;
+    }
+    case "toggleAdd": {
+      const textarea = document.getElementById(`${mode}EmailsInput`);
+      if(textarea){
+        textarea.focus();
+        highlightSubscriptionInput(textarea);
+      }
+      break;
+    }
+    case "clearAdd": {
+      const textarea = document.getElementById(`${mode}EmailsInput`);
+      if(textarea){
+        textarea.value = "";
+        textarea.focus();
+      }
+      setSubscriptionStatus(mode, "Input cleared.");
+      break;
+    }
+    default:
+      break;
+  }
+}
+
+function initSubscriptionWorkspace(mode){
+  updateSubscriptionPathDisplay(mode);
+  renderSubscriptionResults(mode, [], false, "Results will appear here.");
+  const viewId = `${mode}View`;
+  const container = document.getElementById(viewId);
+  if(container){
+    container.addEventListener("click", (ev) => {
+      const target = ev.target.closest(".subscription-action");
+      if(!target) return;
+      const action = target.dataset.action;
+      const modeAttr = target.dataset.mode || mode;
+      if(action){
+        ev.preventDefault();
+        handleSubscriptionAction(modeAttr, action);
+      }
+    });
+  }
+  const presetInput = document.getElementById(`${mode}PresetInput`);
+  if(presetInput){
+    presetInput.addEventListener("change", (ev) => handleSubscriptionPresetSelection(ev, mode));
+  }
+}
+
+function initHomeNavigation(){
+  const mapping = [
+    { id: "homeFilterBtn", view: "filter" },
+    { id: "homeUnsubscribeBtn", view: "unsubscribe" },
+    { id: "homeSubscribeBtn", view: "subscribe" },
+  ];
+  mapping.forEach(({ id, view }) => {
+    const btn = document.getElementById(id);
+    if(btn){
+      btn.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        setView(view);
+      });
+    }
+  });
+  document.querySelectorAll("[data-nav-target]").forEach((btn) => {
+    btn.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      const targetView = btn.getAttribute("data-nav-target");
+      if(targetView){
+        setView(targetView);
+      }
+    });
+  });
+}
+
 document.addEventListener("DOMContentLoaded", () => {
   setDuplicatesPanelVisible(false);
-  loadFilters();
+  setFilterActionsEnabled(false);
+  initHomeNavigation();
+  initSubscriptionWorkspace("unsubscribe");
+  initSubscriptionWorkspace("subscribe");
+  setView("home");
   $("#previewBtn")?.addEventListener("click", doPreview);
   $("#downloadBtn")?.addEventListener("click", doDownload);
   $("#createPreferenceBtn")?.addEventListener("click", (ev) => {
