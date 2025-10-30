@@ -1,8 +1,10 @@
 import csv
 import json
 import re
+import shutil
 from datetime import datetime
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 
 from flask import Flask, send_from_directory, jsonify, request, Response
 from backend.filterscripts import combinator
@@ -45,6 +47,296 @@ def ensure_unique_path(path: Path) -> Path:
         if not candidate.exists():
             return candidate
         counter += 1
+
+
+def _expand_user_path(raw_path: str | Path) -> Path:
+    if isinstance(raw_path, Path):
+        candidate = raw_path
+    else:
+        candidate = Path(str(raw_path or "").strip())
+    try:
+        return candidate.expanduser()
+    except Exception:
+        return Path(str(candidate))
+
+
+def _require_existing_file(raw_path: str | Path, description: str = "file") -> Path:
+    path = _expand_user_path(raw_path)
+    if not path.exists():
+        raise FileNotFoundError(f"{description.capitalize()} not found: {path}")
+    if not path.is_file():
+        raise ValueError(f"{description.capitalize()} must be a file: {path}")
+    return path
+
+
+def _collect_campaign_files(raw_path: str | Path) -> list[Path]:
+    base = _expand_user_path(raw_path)
+    if not base.exists():
+        raise FileNotFoundError(f"Campaign source not found: {base}")
+    if base.is_file():
+        return [base]
+    if not base.is_dir():
+        raise ValueError(f"Campaign source must be a folder or CSV file: {base}")
+    files = []
+    for path in base.rglob("*"):
+        try:
+            if path.is_file() and path.suffix.lower() == ".csv":
+                files.append(path)
+        except OSError:
+            continue
+    files.sort()
+    return files
+
+
+def _subscription_header_info(row: list[str]) -> tuple[int, bool]:
+    if not row:
+        return 0, False
+    lowered = [cell.strip().lower() for cell in row]
+    for idx, cell in enumerate(lowered):
+        if cell in {"afgemeld", "email", "emails"}:
+            return idx, True
+    return 0, False
+
+
+def _load_subscription_rows(path: Path) -> tuple[list[list[str]], int, bool]:
+    try:
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            reader = csv.reader(handle, delimiter=";")
+            rows = list(reader)
+    except FileNotFoundError:
+        return [], 0, False
+    except UnicodeDecodeError:
+        raise
+
+    email_index = 0
+    has_header = False
+    if rows:
+        email_index, has_header = _subscription_header_info(rows[0])
+    return rows, email_index, has_header
+
+
+def _read_subscription_emails(path: Path) -> tuple[set[str], bool]:
+    rows, email_index, has_header = _load_subscription_rows(path)
+    existing: set[str] = set()
+    start_idx = 1 if has_header else 0
+    for row in rows[start_idx:]:
+        if not row:
+            continue
+        value = row[email_index] if email_index < len(row) else row[0]
+        value_norm = value.strip().lower()
+        if value_norm:
+            existing.add(value_norm)
+    return existing, has_header
+
+
+def _count_subscription_rows(path: Path) -> int:
+    rows, _, has_header = _load_subscription_rows(path)
+    start_idx = 1 if has_header else 0
+    count = 0
+    for row in rows[start_idx:]:
+        if not row:
+            continue
+        if any(cell.strip() for cell in row):
+            count += 1
+    return count
+
+
+def _append_subscription_emails(path: Path, emails: list[str]) -> tuple[int, int, int]:
+    normalized: list[tuple[str, str]] = []
+    seen_inputs: set[str] = set()
+    for raw in emails:
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        lower = text.lower()
+        if lower in seen_inputs:
+            continue
+        seen_inputs.add(lower)
+        normalized.append((text, lower))
+
+    if not normalized:
+        return 0, 0, _count_subscription_rows(path)
+
+    existing, has_header = _read_subscription_emails(path)
+    added = 0
+    skipped = 0
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    file_exists = path.exists()
+    need_header = False
+    if not file_exists:
+        need_header = True
+    else:
+        if path.stat().st_size == 0 and not has_header:
+            need_header = True
+
+    with path.open("a", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle, delimiter=";")
+        if need_header:
+            writer.writerow(["Afgemeld"])
+            has_header = True
+        for text, lower in normalized:
+            if lower in existing:
+                skipped += 1
+                continue
+            writer.writerow([text])
+            existing.add(lower)
+            added += 1
+
+    total = _count_subscription_rows(path)
+    return added, skipped, total
+
+
+def _normalize_email_target(email: str) -> tuple[str, str]:
+    email_value = (email or "").strip().lower()
+    domain = ""
+    if "@" in email_value:
+        domain = email_value.split("@", 1)[1]
+    return email_value, domain
+
+
+def _normalize_header_cell(cell: str) -> str:
+    text = (cell or "").strip().lower().lstrip("\ufeff")
+    return re.sub(r"[^a-z0-9]", "", text)
+
+
+def _campaign_value_matches(value: str, email_lower: str, domain: str) -> bool:
+    cell = (value or "").strip().lower()
+    if not cell:
+        return False
+    if email_lower and email_lower in cell:
+        return True
+    if domain and domain in cell:
+        return True
+    return False
+
+
+def _campaign_cell(row: list[str], index: int | None) -> str:
+    if index is None:
+        return ";".join(row)
+    if index < len(row):
+        return row[index]
+    return ""
+
+
+def _scan_campaign_files(files: list[Path], email: str) -> list[dict]:
+    email_lower, domain = _normalize_email_target(email)
+    results: list[dict] = []
+    if not email_lower and not domain:
+        return results
+    for file_path in files:
+        try:
+            with file_path.open("r", encoding="utf-8", newline="") as handle:
+                reader = csv.reader(handle, delimiter=";")
+                header = next(reader, None)
+                col_index = None
+                row_number = 0
+                has_valid_header = False
+                if header is not None:
+                    row_number = 1
+                    lowered = [_normalize_header_cell(cell) for cell in header]
+                    target_headers = {
+                        "whotocontact",
+                        "whotocontacts",
+                        "whotocontactemail",
+                        "contactemail",
+                    }
+                    match_index = next((idx for idx, name in enumerate(lowered) if name in target_headers), None)
+                    if match_index is not None:
+                        col_index = match_index
+                        has_valid_header = True
+                    else:
+                        value = _campaign_cell(header, None)
+                        if _campaign_value_matches(value, email_lower, domain):
+                            results.append({
+                                "file": str(file_path),
+                                "row": 1,
+                                "value": value,
+                            })
+                for row in reader:
+                    row_number += 1
+                    value = _campaign_cell(row, col_index if has_valid_header else None)
+                    if _campaign_value_matches(value, email_lower, domain):
+                        results.append({
+                            "file": str(file_path),
+                            "row": row_number,
+                            "value": value,
+                        })
+        except (UnicodeDecodeError, OSError):
+            continue
+    return results
+
+
+def _remove_from_campaign_files(files: list[Path], email: str) -> list[dict]:
+    email_lower, domain = _normalize_email_target(email)
+    if not email_lower and not domain:
+        return []
+    removed: list[dict] = []
+    for file_path in files:
+        changed = False
+        try:
+            with file_path.open("r", encoding="utf-8", newline="") as src, NamedTemporaryFile("w", encoding="utf-8", newline="", delete=False) as tmp:
+                reader = csv.reader(src, delimiter=";")
+                writer = csv.writer(tmp, delimiter=";")
+                header = next(reader, None)
+                col_index = None
+                row_number = 0
+                has_valid_header = False
+                if header is not None:
+                    row_number = 1
+                    lowered = [_normalize_header_cell(cell) for cell in header]
+                    target_headers = {
+                        "whotocontact",
+                        "whotocontacts",
+                        "whotocontactemail",
+                        "contactemail",
+                    }
+                    match_index = next((idx for idx, name in enumerate(lowered) if name in target_headers), None)
+                    if match_index is not None:
+                        col_index = match_index
+                        has_valid_header = True
+                        writer.writerow(header)
+                    else:
+                        value = _campaign_cell(header, None)
+                        if _campaign_value_matches(value, email_lower, domain):
+                            removed.append({
+                                "file": str(file_path),
+                                "row": 1,
+                                "value": value,
+                            })
+                            changed = True
+                        else:
+                            writer.writerow(header)
+                for row in reader:
+                    row_number += 1
+                    value = _campaign_cell(row, col_index if has_valid_header else None)
+                    if _campaign_value_matches(value, email_lower, domain):
+                        removed.append({
+                            "file": str(file_path),
+                            "row": row_number,
+                            "value": value,
+                        })
+                        changed = True
+                        continue
+                    writer.writerow(row)
+        except (UnicodeDecodeError, OSError):
+            continue
+
+        if not changed:
+            try:
+                Path(tmp.name).unlink(missing_ok=True)
+            except OSError:
+                pass
+            continue
+
+        try:
+            shutil.move(tmp.name, file_path)
+        except OSError:
+            try:
+                Path(tmp.name).unlink(missing_ok=True)
+            except OSError:
+                pass
+    return removed
 
 @app.route("/")
 def index():
@@ -149,6 +441,87 @@ def api_download():
         "Cache-Control": "no-store"
     }
     return Response(gen(), headers=headers)
+
+
+@app.route("/api/subscription/count", methods=["POST"])
+def api_subscription_count():
+    payload = request.get_json(silent=True) or {}
+    csv_path_raw = payload.get("csvPath") or payload.get("csv")
+    if not csv_path_raw:
+        return jsonify({"ok": False, "error": "Provide the CSV file path."}), 400
+    try:
+        path = _require_existing_file(csv_path_raw, "CSV file")
+        count = _count_subscription_rows(path)
+    except FileNotFoundError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    except UnicodeDecodeError as exc:
+        return jsonify({"ok": False, "error": f"Failed to read CSV: {exc}"}), 400
+    except OSError as exc:
+        return jsonify({"ok": False, "error": f"Filesystem error: {exc}"}), 500
+    return jsonify({"ok": True, "count": count})
+
+
+@app.route("/api/subscription/add", methods=["POST"])
+def api_subscription_add():
+    payload = request.get_json(silent=True) or {}
+    csv_path_raw = payload.get("csvPath") or payload.get("csv")
+    emails_raw = payload.get("emails") or payload.get("entries")
+    if not csv_path_raw:
+        return jsonify({"ok": False, "error": "Provide the CSV file path."}), 400
+    if isinstance(emails_raw, list):
+        emails = [str(item) for item in emails_raw if str(item).strip()]
+    else:
+        return jsonify({"ok": False, "error": "Provide a list of email addresses."}), 400
+    if not emails:
+        return jsonify({"ok": False, "error": "No email addresses provided."}), 400
+    try:
+        path = _expand_user_path(csv_path_raw)
+        added, skipped, total = _append_subscription_emails(path, emails)
+    except UnicodeDecodeError as exc:
+        return jsonify({"ok": False, "error": f"Failed to read CSV: {exc}"}), 400
+    except OSError as exc:
+        return jsonify({"ok": False, "error": f"Filesystem error: {exc}"}), 500
+    return jsonify({"ok": True, "added": added, "skipped": skipped, "count": total})
+
+
+@app.route("/api/subscription/search", methods=["POST"])
+def api_subscription_search():
+    payload = request.get_json(silent=True) or {}
+    campaigns_raw = payload.get("campaignsPath") or payload.get("campaigns") or payload.get("folder")
+    email = str(payload.get("email") or payload.get("address") or "").strip()
+    if not campaigns_raw:
+        return jsonify({"ok": False, "error": "Provide the campaigns folder path."}), 400
+    if not email:
+        return jsonify({"ok": False, "error": "Provide an email address."}), 400
+    try:
+        files = _collect_campaign_files(campaigns_raw)
+    except FileNotFoundError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    results = _scan_campaign_files(files, email)
+    return jsonify({"ok": True, "results": results, "checked_files": len(files)})
+
+
+@app.route("/api/subscription/remove", methods=["POST"])
+def api_subscription_remove():
+    payload = request.get_json(silent=True) or {}
+    campaigns_raw = payload.get("campaignsPath") or payload.get("campaigns") or payload.get("folder")
+    email = str(payload.get("email") or payload.get("address") or "").strip()
+    if not campaigns_raw:
+        return jsonify({"ok": False, "error": "Provide the campaigns folder path."}), 400
+    if not email:
+        return jsonify({"ok": False, "error": "Provide an email address."}), 400
+    try:
+        files = _collect_campaign_files(campaigns_raw)
+    except FileNotFoundError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    removed = _remove_from_campaign_files(files, email)
+    return jsonify({"ok": True, "results": removed, "checked_files": len(files)})
 
 
 @app.route("/api/save", methods=["POST"])
